@@ -50,17 +50,21 @@ pub fn sparkline(counts: &[u32]) -> String {
         .collect()
 }
 
+/// Seconds since the unix epoch, or 0 if the clock is before it.
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Compact age from a unix timestamp: `3d`, `6w`, `9mo`, `2y`.
 ///
 /// git's own `%ar` is written for prose ("2 years, 9 months ago") and is far
 /// too wide for a column, so we derive the age from `%at` instead. These are
 /// plain divisions on a duration, not calendar arithmetic.
 pub fn rel_compact(ts: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let d = now - ts;
+    let d = now_secs() - ts;
     if d < 0 {
         return "future".to_string();
     }

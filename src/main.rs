@@ -21,6 +21,8 @@ fn main() {
     let command = args.remove(0);
     let result = match command.as_str() {
         "log" => cmd::log::run(args),
+        "branches" | "br" => cmd::branches::run(args),
+        "who" => cmd::who::run(args),
         "-h" | "--help" | "help" => {
             print!("{}", cli::USAGE);
             Ok(())

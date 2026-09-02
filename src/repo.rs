@@ -17,6 +17,11 @@ pub const RS: u8 = 0x1e;
 pub const LOG_FORMAT: &str =
     "--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%ar%x1f%D%x1f%s%x1e";
 
+/// Leading separator, used when git appends extra lines after each record
+/// (`--numstat`). Those lines then arrive at the head of the *next* record,
+/// where one split on the first newline separates them cleanly.
+pub const WHO_FORMAT: &str = "--format=%x1e%an%x1f%ae%x1f%at";
+
 /// Borrows every field out of the reader's buffer; nothing here is owned.
 pub struct Commit<'a> {
     pub hash: &'a str,
@@ -42,8 +47,6 @@ impl<'a> Commit<'a> {
             timestamp: f.next()?,
             relative: f.next()?,
             refs: f.next()?,
-            // The subject is last, so a subject containing FS would still be
-            // truncated here; git never emits FS, so this cannot happen.
             subject: f.next()?,
         })
     }
@@ -69,7 +72,7 @@ pub fn capture(args: &[&str]) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Streams `\x1e`-delimited records from a child git process.
+/// Streams separator-delimited records from a child git process.
 pub struct Records {
     child: Child,
     out: BufReader<ChildStdout>,
@@ -89,23 +92,29 @@ impl Records {
 
     /// Next record, or `None` at end of stream. The returned string borrows the
     /// internal buffer and is invalidated by the following call.
+    ///
+    /// Blank records are skipped rather than reported as end-of-stream: a
+    /// format that leads with the separator emits an empty first record, and
+    /// git pads records with newlines.
     pub fn next(&mut self) -> io::Result<Option<Cow<'_, str>>> {
-        self.buf.clear();
-        if self.out.read_until(RS, &mut self.buf)? == 0 {
-            return Ok(None);
-        }
-        if self.buf.last() == Some(&RS) {
-            self.buf.pop();
-        }
-        // git writes a newline after each record's terminator, so every record
-        // after the first arrives with a leading newline.
-        let start = self
-            .buf
-            .iter()
-            .position(|b| *b != b'\n' && *b != b'\r')
-            .unwrap_or(self.buf.len());
-        if start == self.buf.len() {
-            return Ok(None);
+        let start;
+        loop {
+            self.buf.clear();
+            if self.out.read_until(RS, &mut self.buf)? == 0 {
+                return Ok(None);
+            }
+            if self.buf.last() == Some(&RS) {
+                self.buf.pop();
+            }
+            let s = self
+                .buf
+                .iter()
+                .position(|b| !matches!(b, b'\n' | b'\r'))
+                .unwrap_or(self.buf.len());
+            if s < self.buf.len() {
+                start = s;
+                break;
+            }
         }
         // Commit messages are not guaranteed UTF-8; lossy conversion borrows
         // when they are, which is the normal case.
