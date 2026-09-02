@@ -3,6 +3,7 @@ use crate::cmd::log::commit_json;
 use gitlimes::fmt::{fit, parse_ts, rel_compact};
 use gitlimes::graph::draw::{branch_row, commit_row, fold_row, shift_row, Glyphs, ASCII, UNICODE};
 use gitlimes::graph::lanes::Lanes;
+use gitlimes::pager;
 use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
@@ -111,8 +112,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     let mut rec = Records::spawn(repo::git(&refs))?;
 
     let mut lanes = Lanes::new();
-    let stdout = io::stdout();
-    let mut w = io::BufWriter::with_capacity(32 * 1024, stdout.lock());
+    let mut w = pager::out();
 
     while let Some(line) = rec.next_record()? {
         let Some(commit) = Commit::parse(&line) else {
@@ -167,8 +167,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
             writeln!(w, "{}", row)?;
         }
     }
-    w.flush()?;
-    drop(w);
+    w.finish()?;
     rec.finish()
 }
 

@@ -671,3 +671,77 @@ fn balanced_braces(s: &str) -> Option<usize> {
         None
     }
 }
+
+// ------------------------------------------------------------------ pager
+
+#[test]
+fn paging_does_not_change_the_output() {
+    // `cat` stands in for a real pager: same bytes, just routed through a pipe.
+    let f = repo();
+    let direct = f.ok(&["log", "--no-pager", "--no-color"]);
+    let paged = f.run_env(
+        &[("GITLIMES_PAGER", "cat")],
+        &["log", "--pager", "--no-color"],
+    );
+    assert!(paged.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&paged.stdout),
+        direct,
+        "paging altered the output"
+    );
+}
+
+#[test]
+fn a_missing_pager_falls_back_instead_of_failing() {
+    // A stale PAGER setting is common and must never break the tool.
+    let f = repo();
+    let out = f.run_env(
+        &[("GITLIMES_PAGER", "definitely-not-a-real-program-xyz")],
+        &["log", "-n", "2", "--pager", "--no-color"],
+    );
+    assert!(
+        out.status.success(),
+        "an unusable pager should degrade quietly, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 2);
+}
+
+#[test]
+fn an_empty_pager_setting_disables_paging() {
+    let f = repo();
+    let out = f.run_env(
+        &[("PAGER", "")],
+        &["log", "-n", "2", "--pager", "--no-color"],
+    );
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 2);
+}
+
+#[test]
+fn output_is_not_paged_when_redirected() {
+    // Tests capture stdout through a pipe, so Auto mode must not page - if it
+    // did, a nonexistent pager would be spawned on every ordinary run.
+    let f = repo();
+    let out = f.run_env(
+        &[("GITLIMES_PAGER", "definitely-not-a-real-program-xyz")],
+        &["log", "-n", "2", "--no-color"],
+    );
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 2);
+}
+
+#[test]
+fn every_command_accepts_the_pager_flags() {
+    let f = repo();
+    for cmd in ["log", "branches", "who", "graph"] {
+        assert!(f.run(&[cmd, "--no-pager"]).status.success(), "{}", cmd);
+        assert!(
+            f.run_env(&[("GITLIMES_PAGER", "cat")], &[cmd, "--pager"])
+                .status
+                .success(),
+            "{}",
+            cmd
+        );
+    }
+}

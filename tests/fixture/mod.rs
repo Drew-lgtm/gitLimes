@@ -227,6 +227,15 @@ impl Fixture {
             .expect("run gitlimes")
     }
 
+    /// Runs the binary with extra environment variables set.
+    pub fn run_env(&self, env: &[(&str, &str)], args: &[&str]) -> Output {
+        let mut c = self.base_command(env!("CARGO_BIN_EXE_gitlimes"));
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.args(args).output().expect("run gitlimes")
+    }
+
     /// Runs the binary with `NO_COLOR` set in the environment.
     pub fn run_no_color_env(&self, args: &[&str]) -> Output {
         self.base_command(env!("CARGO_BIN_EXE_gitlimes"))

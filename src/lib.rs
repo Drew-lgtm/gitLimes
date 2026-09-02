@@ -48,5 +48,6 @@
 pub mod fmt;
 pub mod graph;
 pub mod json;
+pub mod pager;
 pub mod repo;
 pub mod style;

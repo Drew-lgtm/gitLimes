@@ -1,6 +1,7 @@
 use crate::cli;
 use gitlimes::fmt::{fit, parse_ts, rel_compact};
 use gitlimes::json::Obj;
+use gitlimes::pager;
 use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
@@ -108,8 +109,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     let mut rec = Records::spawn(repo::git(&refs))?;
 
-    let stdout = io::stdout();
-    let mut w = io::BufWriter::with_capacity(32 * 1024, stdout.lock());
+    let mut w = pager::out();
 
     while let Some(line) = rec.next_record()? {
         let Some(commit) = Commit::parse(&line) else {
@@ -144,8 +144,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
             )?;
         }
     }
-    w.flush()?;
-    drop(w);
+    w.finish()?;
     rec.finish()
 }
 

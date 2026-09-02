@@ -1,6 +1,7 @@
 use crate::cli;
 use gitlimes::fmt::{fit, parse_ts, rel_compact, short_email, span_label, sparkline};
 use gitlimes::json::Obj;
+use gitlimes::pager;
 use gitlimes::repo::{self, Records, WHO_FORMAT};
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RESET, YELLOW};
 use std::collections::HashMap;
@@ -196,8 +197,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     }
 
     if o.json {
-        let stdout = io::stdout();
-        let mut w = io::BufWriter::new(stdout.lock());
+        let mut w = pager::out();
         for a in &list {
             let mut obj = Obj::new();
             obj.str("name", &a.name)
@@ -214,7 +214,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
             }
             writeln!(w, "{}", obj.finish())?;
         }
-        return w.flush();
+        return w.finish();
     }
 
     let name_w = list
@@ -233,8 +233,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         .unwrap_or(10)
         .clamp(10, 24);
 
-    let stdout = io::stdout();
-    let mut w = io::BufWriter::new(stdout.lock());
+    let mut w = pager::out();
 
     write!(
         w,
@@ -296,7 +295,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         series.reverse();
         writeln!(w, "{}{}{}", c(GREEN), sparkline(&series), c(RESET))?;
     }
-    w.flush()
+    w.finish()
 }
 
 /// Halves the resolution: each pair of neighbouring buckets becomes one, so the
