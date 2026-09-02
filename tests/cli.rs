@@ -158,17 +158,33 @@ fn branches_lists_every_local_branch_with_the_current_one_marked() {
 
 #[test]
 fn branches_vs_reports_ahead_and_behind() {
+    // The exact numbers matter: `%(ahead-behind:)` reports "ahead behind" while
+    // `rev-list --left-right` reports "behind ahead", so an inverted pair is a
+    // silent, plausible-looking wrong answer.
+    //
+    // The side branch forked at E and added G, so it is ahead by 1. It is
+    // behind by 4, not 2: main gained F and the merge M, and M also brought C
+    // and D into main's reachable set.
     let f = repo();
     let out = f.ok(&["branches", "--vs", "main", "--no-color"]);
-    let stale = out
+    let side = out
         .lines()
         .find(|l| l.contains(SIDE_BRANCH))
         .expect("the side branch is listed");
-    // It forked at main~2 and added one commit of its own.
     assert!(
-        stale.contains("ahead 1") && stale.contains("behind"),
-        "expected ahead/behind counts, got: {}",
-        stale
+        side.contains("ahead 1, behind 4"),
+        "expected 'ahead 1, behind 4', got: {}",
+        side
+    );
+
+    let main = out
+        .lines()
+        .find(|l| l.starts_with('*'))
+        .expect("main is listed");
+    assert!(
+        !main.contains("ahead") && !main.contains("behind"),
+        "main compared against itself must show no divergence, got: {}",
+        main
     );
 }
 
