@@ -1,7 +1,7 @@
 use crate::cli;
-use crate::fmt::{fit, parse_ts, rel_compact};
-use crate::repo;
-use crate::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
+use gitlimes::fmt::{fit, parse_ts, rel_compact};
+use gitlimes::repo;
+use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
 
 pub const HELP: &str = "\
@@ -141,7 +141,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         .unwrap_or(0)
         .min(20);
 
-    let now = crate::fmt::now_secs();
+    let now = gitlimes::fmt::now_secs();
     let stale_cutoff = o.stale_days.map(|d| now - d * 86_400);
 
     let stdout = io::stdout();

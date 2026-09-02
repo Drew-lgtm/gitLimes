@@ -1,7 +1,7 @@
 use crate::cli;
-use crate::fmt::{fit, now_secs, parse_ts, rel_compact, short_email, sparkline};
-use crate::repo::{self, Records, WHO_FORMAT};
-use crate::style::{c, BOLD, CYAN, DIM, GREEN, RESET, YELLOW};
+use gitlimes::fmt::{fit, now_secs, parse_ts, rel_compact, short_email, sparkline};
+use gitlimes::repo::{self, Records, WHO_FORMAT};
+use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RESET, YELLOW};
 use std::collections::HashMap;
 use std::io::{self, Write};
 
@@ -118,7 +118,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     let now = now_secs();
     let mut total = 0u32;
 
-    while let Some(record) = rec.next()? {
+    while let Some(record) = rec.next_record()? {
         // With --numstat, git appends this commit's stat lines after the
         // fields; the leading separator keeps them inside the same record.
         let (head, stats) = match record.split_once('\n') {

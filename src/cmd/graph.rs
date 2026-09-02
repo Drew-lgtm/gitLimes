@@ -1,9 +1,9 @@
 use crate::cli;
-use crate::fmt::{fit, parse_ts, rel_compact};
-use crate::graph::draw::{branch_row, commit_row, fold_row, shift_row, Glyphs, ASCII, UNICODE};
-use crate::graph::lanes::Lanes;
-use crate::repo::{self, Commit, Records, LOG_FORMAT};
-use crate::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
+use gitlimes::fmt::{fit, parse_ts, rel_compact};
+use gitlimes::graph::draw::{branch_row, commit_row, fold_row, shift_row, Glyphs, ASCII, UNICODE};
+use gitlimes::graph::lanes::Lanes;
+use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
+use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
 
 pub const HELP: &str = "\
@@ -110,7 +110,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     let stdout = io::stdout();
     let mut w = io::BufWriter::with_capacity(32 * 1024, stdout.lock());
 
-    while let Some(line) = rec.next()? {
+    while let Some(line) = rec.next_record()? {
         let Some(commit) = Commit::parse(&line) else {
             continue;
         };

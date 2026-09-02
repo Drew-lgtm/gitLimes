@@ -1,7 +1,7 @@
 use crate::cli;
-use crate::fmt::{fit, parse_ts, rel_compact};
-use crate::repo::{self, Commit, Records, LOG_FORMAT};
-use crate::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
+use gitlimes::fmt::{fit, parse_ts, rel_compact};
+use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
+use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
 
 pub const HELP: &str = "\
@@ -107,7 +107,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     let stdout = io::stdout();
     let mut w = io::BufWriter::with_capacity(32 * 1024, stdout.lock());
 
-    while let Some(line) = rec.next()? {
+    while let Some(line) = rec.next_record()? {
         let Some(commit) = Commit::parse(&line) else {
             continue;
         };

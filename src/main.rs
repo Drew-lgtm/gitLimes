@@ -1,10 +1,10 @@
+//! The command line front end. Everything reusable lives in the library
+//! (see src/lib.rs); this binary only parses arguments and prints.
+
 mod cli;
 mod cmd;
-mod fmt;
-mod graph;
-mod repo;
-mod style;
 
+use gitlimes::style;
 use std::io::ErrorKind;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
