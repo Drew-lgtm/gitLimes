@@ -1,5 +1,6 @@
 use crate::cli;
 use gitlimes::fmt::{fit, parse_ts, rel_compact};
+use gitlimes::json::Obj;
 use gitlimes::repo;
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
@@ -14,6 +15,7 @@ OPTIONS:
     -a, --all            include remote-tracking branches
         --stale <DAYS>   mark branches untouched for longer than DAYS
         --vs <REF>       show ahead/behind against REF instead of the upstream
+        --json           one JSON object per branch (newline delimited)
     -h, --help           show this help
 ";
 
@@ -58,6 +60,7 @@ struct Opts {
     all: bool,
     stale_days: Option<i64>,
     vs: Option<String>,
+    json: bool,
 }
 
 fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
@@ -86,6 +89,7 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
                 );
             }
             "--vs" => o.vs = Some(value(&mut it)?),
+            "--json" => o.json = true,
             s => return Err(cli::Unknown(s.to_string()).to_string()),
         }
     }
@@ -158,6 +162,22 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         for b in branches.iter_mut() {
             b.track = compare_to(base, &b.name)?;
         }
+    }
+
+    if o.json {
+        let stdout = io::stdout();
+        let mut w = io::BufWriter::new(stdout.lock());
+        for b in &branches {
+            let mut o = Obj::new();
+            o.str("name", &b.name)
+                .bool("current", b.current)
+                .num("date", b.ts)
+                .str("author", &b.author)
+                .str_opt("track", &b.track)
+                .str("subject", &b.subject);
+            writeln!(w, "{}", o.finish())?;
+        }
+        return w.flush();
     }
 
     let name_w = branches

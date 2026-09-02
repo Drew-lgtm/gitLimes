@@ -23,6 +23,8 @@
 //!   emits an abstract [`graph::lanes::Step`] per commit and draws nothing.
 //! - [`graph::draw`] renders those steps as terminal rows. A second renderer -
 //!   SVG, HTML, a canvas - plugs in here and reuses the layout unchanged.
+//! - [`json`] emits newline-delimited JSON, the machine-readable form of every
+//!   command's output.
 //! - [`fmt`] and [`style`] are presentation helpers: column fitting, relative
 //!   dates, sparklines, ANSI colour.
 //!
@@ -45,5 +47,6 @@
 
 pub mod fmt;
 pub mod graph;
+pub mod json;
 pub mod repo;
 pub mod style;

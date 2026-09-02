@@ -1,5 +1,6 @@
 use crate::cli;
 use gitlimes::fmt::{fit, parse_ts, rel_compact, short_email, span_label, sparkline};
+use gitlimes::json::Obj;
 use gitlimes::repo::{self, Records, WHO_FORMAT};
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RESET, YELLOW};
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ OPTIONS:
         --limit <N>      show only the top N authors
         --lines          also count added/removed lines (slower)
         --all            include all refs, not just HEAD
+        --json           one JSON object per author (newline delimited)
     -h, --help           show this help
 
 The activity sparkline spans the whole history shown, oldest block first.
@@ -53,6 +55,7 @@ struct Opts {
     limit: Option<usize>,
     lines: bool,
     all: bool,
+    json: bool,
     paths: Vec<String>,
 }
 
@@ -89,6 +92,7 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
             }
             "--lines" => o.lines = true,
             "--all" => o.all = true,
+            "--json" => o.json = true,
             s if s.starts_with('-') => return Err(cli::Unknown(s.to_string()).to_string()),
             s => o.paths.push(s.to_string()),
         }
@@ -189,6 +193,28 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     list.sort_by(|a, b| b.commits.cmp(&a.commits).then(b.last.cmp(&a.last)));
     if let Some(n) = o.limit {
         list.truncate(n);
+    }
+
+    if o.json {
+        let stdout = io::stdout();
+        let mut w = io::BufWriter::new(stdout.lock());
+        for a in &list {
+            let mut obj = Obj::new();
+            obj.str("name", &a.name)
+                .str("email", &a.email)
+                .num("commits", a.commits as i64)
+                .num("first", a.first)
+                .num("last", a.last)
+                // Oldest bucket first, matching the rendered sparkline.
+                .nums("activity", a.activity.iter().rev().map(|v| *v as i64))
+                .num("bucket_seconds", width);
+            if o.lines {
+                obj.num("added", a.added as i64)
+                    .num("removed", a.removed as i64);
+            }
+            writeln!(w, "{}", obj.finish())?;
+        }
+        return w.flush();
     }
 
     let name_w = list

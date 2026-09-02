@@ -1,5 +1,6 @@
 use crate::cli;
 use gitlimes::fmt::{fit, parse_ts, rel_compact};
+use gitlimes::json::Obj;
 use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
@@ -17,6 +18,7 @@ OPTIONS:
         --until <DATE>    only commits older than DATE
         --all             include all refs, not just HEAD
         --oneline         hash and subject only
+        --json            one JSON object per commit (newline delimited)
     -h, --help            show this help
 ";
 
@@ -28,6 +30,7 @@ struct Opts {
     until: Option<String>,
     all: bool,
     oneline: bool,
+    json: bool,
     revs: Vec<String>,
     paths: Vec<String>,
 }
@@ -62,6 +65,7 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
             "--until" => o.until = Some(value(&mut it)?),
             "--all" => o.all = true,
             "--oneline" => o.oneline = true,
+            "--json" => o.json = true,
             s if s.starts_with('-') => return Err(cli::Unknown(s.to_string()).to_string()),
             s => o.revs.push(s.to_string()),
         }
@@ -111,7 +115,9 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         let Some(commit) = Commit::parse(&line) else {
             continue;
         };
-        if o.oneline {
+        if o.json {
+            writeln!(w, "{}", commit_json(&commit).finish())?;
+        } else if o.oneline {
             writeln!(
                 w,
                 "{}{}{} {}",
@@ -169,4 +175,34 @@ fn decorate(refs: &str) -> String {
     }
     out.push_str(") ");
     out
+}
+
+/// The shared commit shape for `--json`, also used by `graph`.
+pub fn commit_json(commit: &Commit<'_>) -> Obj {
+    let mut o = Obj::new();
+    o.str("hash", commit.hash)
+        .str("short", commit.short)
+        .strs("parents", commit.parent_iter())
+        .str("author", commit.author)
+        .num("date", parse_ts(commit.timestamp))
+        .strs("refs", ref_names(commit.refs))
+        .str("subject", commit.subject);
+    // Which ref is checked out is lost once the decorations are stripped, and
+    // a consumer almost always wants it back.
+    if commit.refs.contains("HEAD") {
+        o.bool("head", true);
+    }
+    o
+}
+
+/// Splits `%D` into individual ref names, dropping git's decoration prefixes so
+/// consumers get `main` and `v1.0` rather than `HEAD -> main` and `tag: v1.0`.
+fn ref_names(refs: &str) -> impl Iterator<Item = &str> {
+    refs.split(", ").filter(|r| !r.is_empty()).map(|r| {
+        r.rsplit(" -> ")
+            .next()
+            .unwrap_or(r)
+            .strip_prefix("tag: ")
+            .unwrap_or_else(|| r.rsplit(" -> ").next().unwrap_or(r))
+    })
 }
