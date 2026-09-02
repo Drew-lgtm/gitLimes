@@ -1,6 +1,7 @@
 mod cli;
 mod cmd;
 mod fmt;
+mod graph;
 mod repo;
 mod style;
 
@@ -23,6 +24,7 @@ fn main() {
         "log" => cmd::log::run(args),
         "branches" | "br" => cmd::branches::run(args),
         "who" => cmd::who::run(args),
+        "graph" => cmd::graph::run(args),
         "-h" | "--help" | "help" => {
             print!("{}", cli::USAGE);
             Ok(())
