@@ -67,6 +67,20 @@ pub fn capture(args: &[&str]) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Like [`capture`], but returns `None` instead of exiting when git fails, and
+/// swallows git's error message.
+///
+/// This is for *feature detection*: asking the installed git whether it
+/// supports something by trying it. That is more reliable than parsing
+/// `git --version`, which says nothing about how a distribution built it.
+pub fn probe(args: &[&str]) -> io::Result<Option<String>> {
+    let out = git(args).stderr(Stdio::null()).output()?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
 /// Streams separator-delimited records from a child git process.
 pub struct Records {
     child: Child,
