@@ -21,6 +21,28 @@ A fast, low-memory CLI for asking a git repository what happened and who did it.
 take over the terminal. GitHub needs a browser and a network round trip. `gitlimes` prints a
 readable, coloured answer and exits.
 
+## Install
+
+Prebuilt binaries for Linux, macOS and Windows are attached to each
+[release](https://github.com/Drew-lgtm/gitLimes/releases). Download, extract, put `gitlimes` on
+your `PATH`.
+
+From crates.io:
+
+```
+cargo install gitlimes
+```
+
+From source:
+
+```
+git clone https://github.com/Drew-lgtm/gitLimes
+cd gitLimes
+cargo build --release
+```
+
+The binary lands in `target/release/gitlimes` and needs `git` on `PATH`. Tip: `alias limes=gitlimes`.
+
 ## Commands
 
 ```
@@ -30,8 +52,8 @@ gitlimes who       author and contribution stats
 gitlimes graph     unicode branch graph
 ```
 
-Every command takes `--help`. `--color` / `--no-color` override tty detection, and `NO_COLOR`
-is honoured.
+Every command takes `--help` and `--json`. `--color` / `--no-color` and `--pager` / `--no-pager`
+override tty detection; `NO_COLOR`, `GITLIMES_PAGER` and `PAGER` are honoured.
 
 ### log
 
@@ -48,7 +70,8 @@ gitlimes branches [-a] [--stale DAYS] [--vs REF]
 ```
 
 Sorted by last commit. Ahead/behind comes free from the tracked upstream; `--vs REF` compares
-against an arbitrary branch instead and is opt-in because it costs one extra git call per branch.
+against an arbitrary branch instead, in the same single git process via `%(ahead-behind:)`
+(git 2.41+, with a per-branch fallback on older versions).
 
 ### who
 
@@ -56,10 +79,16 @@ against an arbitrary branch instead and is opt-in because it costs one extra git
 gitlimes who [PATH] [--since DATE] [--limit N] [--lines]
 ```
 
-Commits per author with share, first and last seen, and a 12-month activity sparkline. Authors
+Commits per author with share, first and last seen, and an activity sparkline. Authors
 are keyed by email, so one person committing under several names stays one row — and the email
 column shows which identity it is. Pass a path to ask who owns a directory. `--lines` adds
 added/removed line counts and is opt-in because it roughly doubles the work git has to do.
+
+The sparkline spans the *whole* history rather than a fixed recent window, so a repository that
+went quiet years ago still shows its shape. Its scale adapts - the header says what one block is
+worth - because the span is not known until the oldest commit is read, and remembering every
+timestamp to find it would make memory scale with history. Instead the buckets start one day wide
+and double whenever a commit falls off the left edge.
 
 ### graph
 
@@ -72,6 +101,49 @@ whole life, even as it changes column. `--ascii` for terminals without box-drawi
 
 The topology matches `git log --graph` exactly, and is usually more compact — where git needs
 three rows to untangle a crossing merge, the box-drawing form needs one.
+
+## Machine-readable output
+
+Every command takes `--json` and emits newline-delimited JSON: one self-contained object per line,
+never a wrapping array. An array would have to be closed at the end, which means either buffering
+the whole result or emitting something that is invalid until the process exits. NDJSON stays
+streamable, survives `head`, and `jq -s` collects it into an array when a consumer wants one.
+
+```console
+$ gitlimes log -n 1 --json | jq -r '.subject'
+$ gitlimes who --json | jq -s 'map(select(.commits > 10))'
+```
+
+`graph --json` carries the lane geometry alongside each commit:
+
+```json
+{"short":"6ff6ffe","subject":"merge: json output",
+ "graph":{"col":0,"lanes":2,"merge":true,"closing":[],"opening":[1],"shifts":[]}}
+```
+
+That is what lets another renderer — an SVG export, a canvas, a TUI — draw the graph without
+re-deriving the layout.
+
+## Use it as a library
+
+The reusable engine is a library; the CLI is one consumer of it. A TUI, a graphical front end or a
+script can link against it instead of shelling out and parsing text.
+
+```rust
+use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
+
+let mut records = Records::spawn(repo::git(&["log", LOG_FORMAT, "--"]))?;
+while let Some(record) = records.next_record()? {
+    if let Some(commit) = Commit::parse(&record) {
+        println!("{} {}", commit.short, commit.subject);
+    }
+}
+records.finish()?;
+```
+
+`graph::lanes` turns a commit stream into branch-lane geometry and draws nothing; `graph::draw`
+renders that geometry as terminal rows. The split is deliberate — a second renderer reuses the
+layout instead of reimplementing it.
 
 ## Design premise: flat memory
 
@@ -101,24 +173,10 @@ effectively zero.
 
 No `clap`, no `chrono`, no `crossterm` — only the standard library. Argument parsing, ANSI
 escapes and tty detection are all small enough to own, and git formats dates for us. The result
-is a **342 KB** binary, an empty supply chain, and a build that finishes in seconds.
+is a **385 KB** binary, an empty supply chain, and a build that finishes in seconds.
 
 The one piece of platform code is a ~20 line `kernel32` call to enable ANSI processing on
 Windows `conhost`; Windows Terminal, macOS and Linux need nothing.
-
-## Build
-
-```
-cargo build --release
-```
-
-The binary lands in `target/release/gitlimes` and needs `git` on `PATH`.
-
-Tip: alias it for daily use.
-
-```
-alias limes=gitlimes
-```
 
 ## Tests
 
@@ -126,13 +184,13 @@ alias limes=gitlimes
 cargo test
 ```
 
-50 tests in two layers.
+80 tests in two layers.
 
-**20 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
+**37 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
 merges, fork folding, lane reuse and compaction; rendering tests that pin the exact glyph output
-for each case; and column fitting, relative dates and sparklines.
+for each case; JSON escaping; pager resolution; and column fitting, relative dates and sparklines.
 
-**30 integration tests** run the real built binary against a real git repository. That is the only
+**43 integration tests** run the real built binary against a real git repository. That is the only
 way to cover the streaming record reader in `repo.rs` and the hand-rolled argument parsing, so
 they carry the claims that matter: that commit order matches git's, that a subject containing a
 pipe, quotes, a backslash and non-ASCII text survives the field-separated record format, that a
@@ -167,3 +225,28 @@ Tests never ship. `#[cfg(test)]` compiles them out entirely, and the integration
 
 There is no dependency cache: with zero dependencies a cold build takes seconds, and restoring a
 cache would cost more time than it saves.
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*.*.*` tag: it builds
+for Linux, macOS (both architectures) and Windows, smoke-tests each native binary, and attaches
+archives plus SHA-256 checksums to the GitHub Release.
+
+Publishing to crates.io is deliberately not automated. A published version can never be deleted,
+only yanked, so it stays a manual, considered act:
+
+```
+cargo publish --dry-run
+cargo publish
+```
+
+## License
+
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. This is the convention across the Rust ecosystem: MIT is permissive and short,
+and Apache-2.0 adds an explicit patent grant.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+this work by you shall be dual-licensed as above, without any additional terms or conditions.
