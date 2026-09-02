@@ -5,12 +5,13 @@
 //! with them: where a horizontal crosses a vertical the two merge into a cross
 //! glyph instead of overwriting it.
 //!
-//! A commit is drawn as up to three rows, in this order:
+//! A commit is drawn as up to four rows, in this order:
 //!
 //! ```text
 //! fold_row        lanes converging into this commit, from above
 //! commit_row      the dot
 //! branch_row      lanes leaving this commit, below
+//! shift_row       lanes sliding left into columns that just freed up
 //! ```
 //!
 //! Folds are drawn *above* the dot because a fork point is only known when the
@@ -26,6 +27,8 @@ pub struct Glyphs {
     pub vert: char,
     pub horiz: char,
     pub cross: char,
+    /// A lane moving one column to the left.
+    pub slide: char,
     /// Lane to the right bends down-left into the commit column.
     pub fold_left: char,
     /// Lane to the left bends down-right into the commit column.
@@ -45,6 +48,7 @@ pub const UNICODE: Glyphs = Glyphs {
     vert: '\u{2502}',
     horiz: '\u{2500}',
     cross: '\u{253c}',
+    slide: '\u{2571}',
     fold_left: '\u{256f}',
     fold_right: '\u{2570}',
     branch_right: '\u{256e}',
@@ -60,6 +64,7 @@ pub const ASCII: Glyphs = Glyphs {
     vert: '|',
     horiz: '-',
     cross: '+',
+    slide: '/',
     fold_left: '/',
     fold_right: '\\',
     branch_right: '\\',
@@ -146,6 +151,12 @@ fn occupied(row: &[bool], lane: usize) -> bool {
     row.get(lane).copied().unwrap_or(false)
 }
 
+/// Falls back to the column index so a lane without a recorded colour still
+/// differs from its neighbours.
+fn lane_color(map: &[usize], lane: usize) -> usize {
+    map.get(lane).copied().unwrap_or(lane)
+}
+
 /// Lanes converging into this commit, drawn above the dot. `None` when nothing
 /// folds in.
 pub fn fold_row(step: &Step, g: &Glyphs, min_width: usize) -> Option<String> {
@@ -157,10 +168,10 @@ pub fn fold_row(step: &Step, g: &Glyphs, min_width: usize) -> Option<String> {
     // Lanes that pass straight through this row.
     for j in 0..step.width() {
         if j != step.col && occupied(&step.before, j) && occupied(&step.at, j) {
-            grid.put(cell(j), g.vert, j);
+            grid.put(cell(j), g.vert, lane_color(&step.colors, j));
         }
     }
-    connect(&mut grid, g, step.col, &step.closing, &step.before, true);
+    connect(&mut grid, g, step, &step.closing, &step.before, true);
     Some(grid.render(min_width))
 }
 
@@ -170,11 +181,11 @@ pub fn commit_row(step: &Step, g: &Glyphs, min_width: usize) -> String {
     let mut grid = Grid::new(step.width(), g);
     for j in 0..step.width() {
         if occupied(&step.at, j) {
-            grid.put(cell(j), g.vert, j);
+            grid.put(cell(j), g.vert, lane_color(&step.colors, j));
         }
     }
     let dot = if step.is_merge { g.merge } else { g.commit };
-    grid.put(cell(step.col), dot, step.col);
+    grid.put(cell(step.col), dot, step.dot_color);
     grid.render(min_width)
 }
 
@@ -187,16 +198,38 @@ pub fn branch_row(step: &Step, g: &Glyphs, min_width: usize) -> Option<String> {
     let mut grid = Grid::new(step.width(), g);
 
     for j in 0..step.width() {
-        if j != step.col && occupied(&step.at, j) && occupied(&step.after, j) {
-            grid.put(cell(j), g.vert, j);
+        if j != step.col && occupied(&step.at, j) && occupied(&step.pre_shift, j) {
+            grid.put(cell(j), g.vert, lane_color(&step.colors, j));
         }
     }
-    connect(&mut grid, g, step.col, &step.opening, &step.at, false);
+    connect(&mut grid, g, step, &step.opening, &step.at, false);
     Some(grid.render(min_width))
 }
 
-/// Draws edges between `col` and each lane in `targets`, plus the junction that
-/// ties them to the commit's own column.
+/// Lanes sliding one column left to close up a freed column. `None` when
+/// nothing moves.
+pub fn shift_row(step: &Step, g: &Glyphs, min_width: usize) -> Option<String> {
+    if step.shifts.is_empty() {
+        return None;
+    }
+    let mut grid = Grid::new(step.width(), g);
+
+    for j in 0..step.width() {
+        let moving = step.shifts.iter().any(|(from, _)| *from == j);
+        if occupied(&step.pre_shift, j) && !moving {
+            grid.put(cell(j), g.vert, lane_color(&step.colors, j));
+        }
+    }
+    // Every move is one column, so each diagonal occupies the gap between the
+    // old and new column and can never collide with another.
+    for &(from, to) in &step.shifts {
+        grid.put(cell(to) + 1, g.slide, lane_color(&step.colors, from));
+    }
+    Some(grid.render(min_width))
+}
+
+/// Draws edges between the commit column and each lane in `targets`, plus the
+/// junction that ties them to the commit's own column.
 ///
 /// `existing` says which lanes were already live: an edge reaching a live lane
 /// gets a tee (the lane continues past the join) rather than a corner (the lane
@@ -204,16 +237,18 @@ pub fn branch_row(step: &Step, g: &Glyphs, min_width: usize) -> Option<String> {
 fn connect(
     grid: &mut Grid,
     g: &Glyphs,
-    col: usize,
+    step: &Step,
     targets: &[usize],
     existing: &[bool],
     folding: bool,
 ) {
+    let col = step.col;
+    let color = step.dot_color;
     let mut any_left = false;
     let mut any_right = false;
 
     for &k in targets {
-        run(grid, g, col, k, col);
+        run(grid, g, col, k, color);
         let right = k > col;
         let corner = if occupied(existing, k) && !folding {
             // The lane was already open and keeps going, so the edge joins it.
@@ -233,7 +268,7 @@ fn connect(
         } else {
             g.branch_left
         };
-        grid.put(cell(k), corner, col);
+        grid.put(cell(k), corner, color);
         if right {
             any_right = true;
         } else {
@@ -247,7 +282,7 @@ fn connect(
         (true, false) => g.tee_left,
         (false, false) => g.vert,
     };
-    grid.put(cell(col), junction, col);
+    grid.put(cell(col), junction, color);
 }
 
 /// Draws the horizontal between two lanes, exclusive of both endpoints.
@@ -267,7 +302,7 @@ mod tests {
     use super::*;
     use crate::graph::lanes::Lanes;
 
-    /// Renders all three rows of a step in drawing order, trimmed.
+    /// Renders every row of a step in drawing order, trimmed.
     fn rows(step: &Step) -> Vec<String> {
         let mut v = Vec::new();
         if let Some(r) = fold_row(step, &ASCII, 0) {
@@ -275,6 +310,9 @@ mod tests {
         }
         v.push(commit_row(step, &ASCII, 0).trim_end().to_string());
         if let Some(r) = branch_row(step, &ASCII, 0) {
+            v.push(r.trim_end().to_string());
+        }
+        if let Some(r) = shift_row(step, &ASCII, 0) {
             v.push(r.trim_end().to_string());
         }
         v
@@ -322,6 +360,14 @@ mod tests {
     }
 
     #[test]
+    fn a_freed_column_is_closed_up_by_a_diagonal() {
+        let mut l = Lanes::new();
+        l.advance("m", &["a", "s"]); // lane 0 = a, lane 1 = s
+        let s = l.advance("a", &[]); // lane 0 ends, so lane 1 slides into it
+        assert_eq!(rows(&s), vec!["* |", " /"]);
+    }
+
+    #[test]
     fn horizontal_crossing_a_lane_does_not_erase_it() {
         // A merge reaching past an open middle lane must cross it, not cut it.
         let mut l = Lanes::new();
@@ -331,6 +377,19 @@ mod tests {
             branch_row(&s, &ASCII, 0).unwrap().trim_end(),
             "+-+-\\",
             "lane 1 survives as a crossing"
+        );
+    }
+
+    #[test]
+    fn a_lane_keeps_one_colour_across_a_shift() {
+        let mut l = Lanes::new();
+        let m = l.advance("m", &["a", "s"]);
+        let side_color = m.colors_after[1];
+        let s = l.advance("a", &[]); // side lane slides from column 1 to 0
+        assert_eq!(s.shifts, vec![(1, 0)]);
+        assert_eq!(
+            s.colors_after[0], side_color,
+            "the branch keeps its colour in its new column"
         );
     }
 

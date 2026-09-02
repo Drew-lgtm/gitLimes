@@ -1,6 +1,6 @@
 use crate::cli;
 use crate::fmt::{fit, parse_ts, rel_compact};
-use crate::graph::draw::{branch_row, commit_row, fold_row, Glyphs, ASCII, UNICODE};
+use crate::graph::draw::{branch_row, commit_row, fold_row, shift_row, Glyphs, ASCII, UNICODE};
 use crate::graph::lanes::Lanes;
 use crate::repo::{self, Commit, Records, LOG_FORMAT};
 use crate::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
@@ -141,6 +141,9 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         )?;
 
         if let Some(row) = branch_row(&step, glyphs, width) {
+            writeln!(w, "{}", row)?;
+        }
+        if let Some(row) = shift_row(&step, glyphs, width) {
             writeln!(w, "{}", row)?;
         }
     }

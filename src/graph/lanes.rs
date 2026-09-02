@@ -6,16 +6,25 @@
 //! branches are simultaneously in flight - typically a handful - and never by
 //! the length of the history.
 
+/// One open lane: the commit it waits for, plus a colour that stays with it for
+/// its whole life so a branch keeps one colour even as it moves columns.
+#[derive(Clone, Debug, PartialEq)]
+struct Lane {
+    waiting_for: String,
+    color: usize,
+}
+
 /// What happened at one commit, in terms the renderer can draw without knowing
 /// anything about git.
 ///
-/// A commit occupies up to three rows, and the three occupancy snapshots say
-/// which lanes are drawn on each:
+/// A commit occupies up to four rows, and the occupancy snapshots say which
+/// lanes are drawn on each:
 ///
 /// ```text
 /// before   |/      lanes fold in from above
 /// at       *       the commit itself
-/// after    |\      lanes branch out below
+/// (at)     |\      lanes branch out below
+/// after     /      lanes slide left into freed columns
 /// ```
 #[derive(Debug, PartialEq)]
 pub struct Step {
@@ -25,7 +34,9 @@ pub struct Step {
     pub before: Vec<bool>,
     /// Lane occupancy on the dot's own row.
     pub at: Vec<bool>,
-    /// Lane occupancy on the next commit's row.
+    /// Lane occupancy on the shift row, before compaction slides lanes left.
+    pub pre_shift: Vec<bool>,
+    /// Lane occupancy once branching and compaction are done.
     pub after: Vec<bool>,
     /// Lanes that were also waiting for this commit and fold into `col`.
     /// These are fork points: one parent with two children.
@@ -33,19 +44,33 @@ pub struct Step {
     /// Lanes this commit's extra parents continue in. An edge is drawn from
     /// `col` out to each of them.
     pub opening: Vec<usize>,
+    /// Lanes sliding left to fill freed columns, as `(from, to)` pairs. Every
+    /// move is exactly one column, so the shift reads as a single diagonal.
+    pub shifts: Vec<(usize, usize)>,
     /// True when the commit has more than one parent.
     pub is_merge: bool,
+    /// Lane colours by column, before compaction.
+    pub colors: Vec<usize>,
+    /// Lane colours by column, after compaction.
+    pub colors_after: Vec<usize>,
+    /// Colour of the commit's own dot.
+    pub dot_color: usize,
 }
 
 impl Step {
     pub fn width(&self) -> usize {
-        self.before.len().max(self.at.len()).max(self.after.len())
+        self.before
+            .len()
+            .max(self.at.len())
+            .max(self.pre_shift.len())
+            .max(self.after.len())
     }
 }
 
 #[derive(Default)]
 pub struct Lanes {
-    slots: Vec<Option<String>>,
+    slots: Vec<Option<Lane>>,
+    next_color: usize,
 }
 
 impl Lanes {
@@ -56,6 +81,12 @@ impl Lanes {
     /// Number of currently open lanes. This is the whole of the graph's state.
     pub fn open(&self) -> usize {
         self.slots.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Highest column in use. Compaction keeps this close to `open()`; without
+    /// it, closed lanes would leave holes and the drawing would drift right.
+    pub fn width(&self) -> usize {
+        self.slots.iter().rposition(|s| s.is_some()).map_or(0, |i| i + 1)
     }
 
     pub fn advance(&mut self, hash: &str, parents: &[&str]) -> Step {
@@ -71,17 +102,25 @@ impl Lanes {
         // folds into this column.
         let mut closing = Vec::new();
         for j in 0..self.slots.len() {
-            if j != col && self.slots[j].as_deref() == Some(hash) {
+            if j != col && self.slots[j].as_ref().is_some_and(|l| l.waiting_for == hash) {
                 self.slots[j] = None;
                 closing.push(j);
             }
         }
 
         let at = self.snapshot();
+        let dot_color = self.slots[col].as_ref().map_or(0, |l| l.color);
 
-        // The first parent inherits this lane, so mainline history stays in a
-        // straight column.
-        self.slots[col] = parents.first().map(|p| p.to_string());
+        // The first parent inherits this lane - keeping its colour - so
+        // mainline history stays in one straight, consistently coloured column.
+        match parents.first() {
+            Some(p) => {
+                if let Some(lane) = self.slots[col].as_mut() {
+                    lane.waiting_for = (*p).to_string();
+                }
+            }
+            None => self.slots[col] = None,
+        }
 
         let mut opening = Vec::new();
         for p in parents.iter().skip(1) {
@@ -94,30 +133,63 @@ impl Lanes {
             }
         }
 
+        let colors = self.color_map();
+        let pre_shift = self.snapshot();
+        let shifts = self.compact();
+
         Step {
             col,
             before,
             at,
+            pre_shift,
             after: self.snapshot(),
             closing,
             opening,
+            shifts,
             is_merge: parents.len() > 1,
+            colors,
+            colors_after: self.color_map(),
+            dot_color,
         }
     }
 
+    /// Slides every lane one column left where the column to its left is free.
+    /// One pass moves each lane at most once, so the shift is always a single
+    /// clean diagonal; repeated commits finish the job for wider gaps.
+    fn compact(&mut self) -> Vec<(usize, usize)> {
+        let mut shifts = Vec::new();
+        for i in 0..self.slots.len().saturating_sub(1) {
+            if self.slots[i].is_none() && self.slots[i + 1].is_some() {
+                self.slots[i] = self.slots[i + 1].take();
+                shifts.push((i + 1, i));
+            }
+        }
+        while matches!(self.slots.last(), Some(None)) {
+            self.slots.pop();
+        }
+        shifts
+    }
+
     fn find(&self, hash: &str) -> Option<usize> {
-        self.slots.iter().position(|s| s.as_deref() == Some(hash))
+        self.slots
+            .iter()
+            .position(|s| s.as_ref().is_some_and(|l| l.waiting_for == hash))
     }
 
     /// Reuses the leftmost free lane so the drawing stays narrow.
     fn claim(&mut self, hash: &str) -> usize {
+        let lane = Lane {
+            waiting_for: hash.to_string(),
+            color: self.next_color,
+        };
+        self.next_color = self.next_color.wrapping_add(1);
         match self.slots.iter().position(|s| s.is_none()) {
             Some(i) => {
-                self.slots[i] = Some(hash.to_string());
+                self.slots[i] = Some(lane);
                 i
             }
             None => {
-                self.slots.push(Some(hash.to_string()));
+                self.slots.push(Some(lane));
                 self.slots.len() - 1
             }
         }
@@ -131,6 +203,13 @@ impl Lanes {
             v.pop();
         }
         v
+    }
+
+    fn color_map(&self) -> Vec<usize> {
+        self.slots
+            .iter()
+            .map(|s| s.as_ref().map_or(0, |l| l.color))
+            .collect()
     }
 }
 
@@ -149,6 +228,7 @@ mod tests {
             assert_eq!(s.before, vec![true]);
             assert_eq!(s.after, vec![true]);
             assert!(s.closing.is_empty() && s.opening.is_empty());
+            assert!(s.shifts.is_empty());
         }
         // A root commit closes its lane.
         assert_eq!(c.at, vec![true]);
@@ -195,14 +275,44 @@ mod tests {
     }
 
     #[test]
-    fn freed_lanes_are_reused_before_widening() {
+    fn a_branch_keeps_its_colour_for_life() {
+        let mut l = Lanes::new();
+        let m = l.advance("m", &["a", "s"]);
+        let side = m.colors_after[1];
+        assert_ne!(side, m.dot_color, "a new branch gets its own colour");
+        l.advance("a", &["r"]);
+        let s = l.advance("s", &["r"]);
+        assert_eq!(s.dot_color, side, "the side branch keeps that colour");
+    }
+
+    #[test]
+    fn a_freed_column_is_closed_up_by_shifting() {
+        // Lane 0 ends while lane 1 is still live; lane 1 must slide into it
+        // rather than leaving a permanent hole.
         let mut l = Lanes::new();
         l.advance("m", &["a", "s"]);
-        l.advance("a", &[]); // lane 0 closes
-        // A brand new tip should take the freed lane 0, not open lane 2.
-        let t = l.advance("tip", &["x"]);
-        assert_eq!(t.col, 0);
+        let a = l.advance("a", &[]);
+        assert_eq!(a.shifts, vec![(1, 0)], "the live lane slides left");
+        assert_eq!(a.after, vec![true]);
+        assert_eq!(l.width(), 1, "no hole is left behind");
+    }
+
+    #[test]
+    fn compaction_keeps_width_near_the_number_of_live_lanes() {
+        // Open five lanes, then close the leftmost ones and confirm the table
+        // closes up instead of drifting right.
+        let mut l = Lanes::new();
+        l.advance("m", &["p0", "p1", "p2", "p3", "p4"]);
+        assert_eq!(l.width(), 5);
+        for h in ["p0", "p1", "p2"] {
+            l.advance(h, &[]);
+        }
+        // Two lanes remain; a few more commits let compaction finish closing up.
+        for h in ["p3", "p4"] {
+            l.advance(h, &[&format!("{}-next", h)]);
+        }
         assert_eq!(l.open(), 2);
+        assert_eq!(l.width(), 2, "width tracks live lanes, not peak lanes");
     }
 
     #[test]
