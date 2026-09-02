@@ -1,4 +1,5 @@
 use crate::cli;
+use crate::cmd::log::commit_json;
 use gitlimes::fmt::{fit, parse_ts, rel_compact};
 use gitlimes::graph::draw::{branch_row, commit_row, fold_row, shift_row, Glyphs, ASCII, UNICODE};
 use gitlimes::graph::lanes::Lanes;
@@ -16,6 +17,7 @@ OPTIONS:
     -n, --max-count <N>   limit to N commits (default 40)
     -a, --all             include all refs, not just HEAD
         --ascii           draw with ASCII instead of box characters
+        --json            one JSON object per commit, with lane geometry
         --since <DATE>    only commits more recent than DATE
         --author <PAT>    only commits whose author matches PAT
     -h, --help            show this help
@@ -32,6 +34,7 @@ struct Opts {
     max: Option<String>,
     all: bool,
     ascii: bool,
+    json: bool,
     since: Option<String>,
     author: Option<String>,
     revs: Vec<String>,
@@ -64,6 +67,7 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
             "-n" | "--max-count" => o.max = Some(value(&mut it)?),
             "-a" | "--all" => o.all = true,
             "--ascii" => o.ascii = true,
+            "--json" => o.json = true,
             "--since" => o.since = Some(value(&mut it)?),
             "--author" => o.author = Some(value(&mut it)?),
             s if s.starts_with('-') => return Err(cli::Unknown(s.to_string()).to_string()),
@@ -117,6 +121,22 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         let parents: Vec<&str> = commit.parent_iter().collect();
         let step = lanes.advance(commit.hash, &parents);
         let width = (step.width() * 2).max(MIN_GRAPH_CELLS);
+
+        if o.json {
+            // Lane geometry travels with the commit so another renderer - SVG,
+            // a canvas, a TUI - can draw the graph without re-deriving it.
+            let mut c = commit_json(&commit);
+            let mut g = gitlimes::json::Obj::new();
+            g.num("col", step.col as i64)
+                .num("lanes", step.width() as i64)
+                .bool("merge", step.is_merge)
+                .nums("closing", step.closing.iter().map(|v| *v as i64))
+                .nums("opening", step.opening.iter().map(|v| *v as i64))
+                .raw("shifts", &shifts_json(&step.shifts));
+            c.obj("graph", g);
+            writeln!(w, "{}", c.finish())?;
+            continue;
+        }
 
         // Folds are drawn above the dot, branches below it.
         if let Some(row) = fold_row(&step, glyphs, width) {
@@ -177,5 +197,18 @@ fn decorate(refs: &str) -> String {
         out.push_str(c(RESET));
     }
     out.push_str(") ");
+    out
+}
+
+/// `[[from,to],...]`, a shape the typed array helpers do not cover.
+fn shifts_json(shifts: &[(usize, usize)]) -> String {
+    let mut out = String::from("[");
+    for (i, (from, to)) in shifts.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("[{},{}]", from, to));
+    }
+    out.push(']');
     out
 }

@@ -463,3 +463,211 @@ fn a_revision_is_never_mistaken_for_a_flag() {
     );
     assert!(out.stdout.is_empty(), "no commit touches that path");
 }
+
+// ------------------------------------------------------------------- json
+
+#[test]
+fn json_emits_one_object_per_line() {
+    let f = repo();
+    let out = f.ok(&["log", "--json"]);
+    assert_eq!(out.lines().count(), MAIN_COMMITS);
+    for line in out.lines() {
+        assert!(
+            line.starts_with('{') && line.ends_with('}'),
+            "not a self-contained object: {}",
+            line
+        );
+    }
+}
+
+#[test]
+fn json_escapes_quotes_and_backslashes_in_a_subject() {
+    // The fixture subject contains a quote and a backslash. If either reached
+    // the output raw the line would be invalid JSON, and every consumer would
+    // break on exactly the commits that are hardest to notice.
+    let f = repo();
+    let line = f
+        .ok(&["log", "--json"])
+        .lines()
+        .find(|l| l.contains("pipe"))
+        .expect("the tricky subject is present")
+        .to_string();
+
+    assert!(
+        line.contains(r#"\""#),
+        "the quote was not escaped: {}",
+        line
+    );
+    assert!(
+        line.contains(r"\\"),
+        "the backslash was not escaped: {}",
+        line
+    );
+    assert!(
+        line.contains("Přílíš žluťoučký kůň"),
+        "non-ASCII should pass through unescaped: {}",
+        line
+    );
+    assert_eq!(
+        balanced_braces(&line),
+        Some(1),
+        "brace nesting is broken: {}",
+        line
+    );
+}
+
+#[test]
+fn json_never_contains_a_raw_control_character() {
+    let f = repo();
+    for args in [
+        vec!["log", "--json"],
+        vec!["branches", "--json"],
+        vec!["who", "--json"],
+        vec!["graph", "--json"],
+    ] {
+        let out = f.ok(&args);
+        for line in out.lines() {
+            assert!(
+                !line.chars().any(|c| (c as u32) < 0x20),
+                "{:?} emitted a raw control character",
+                args
+            );
+        }
+    }
+}
+
+#[test]
+fn json_output_is_never_coloured() {
+    // --color forces colour on, but a JSON consumer would choke on escapes.
+    let f = repo();
+    for args in [
+        vec!["log", "--json", "--color"],
+        vec!["branches", "--json", "--color"],
+        vec!["who", "--json", "--color"],
+        vec!["graph", "--json", "--color"],
+    ] {
+        assert!(!has_ansi(&f.ok(&args)), "{:?} emitted colour", args);
+    }
+}
+
+#[test]
+fn log_json_carries_the_fields_a_consumer_needs() {
+    let f = repo();
+    let out = f.ok(&["log", "-n", "1", "--json"]);
+    let line = out.lines().next().unwrap();
+    for key in [
+        r#""hash":"#,
+        r#""short":"#,
+        r#""parents":"#,
+        r#""author":"#,
+        r#""date":"#,
+        r#""refs":"#,
+        r#""subject":"#,
+    ] {
+        assert!(line.contains(key), "missing {} in {}", key, line);
+    }
+    assert!(line.contains(r#""head":true"#), "HEAD is not marked");
+    assert!(line.contains(r#""v1.0""#), "the tag should appear in refs");
+    assert!(
+        !line.contains("tag: ") && !line.contains(" -> "),
+        "decorations should be stripped from ref names: {}",
+        line
+    );
+}
+
+#[test]
+fn graph_json_carries_lane_geometry() {
+    // This is what lets a second renderer draw the graph without re-deriving
+    // the layout, so it is the part most worth pinning.
+    let f = repo();
+    let out = f.ok(&["graph", "--json"]);
+    assert_eq!(out.lines().count(), MAIN_COMMITS);
+
+    let merge = out
+        .lines()
+        .find(|l| l.contains("merge: feature"))
+        .expect("the merge commit is present");
+    assert!(merge.contains(r#""merge":true"#), "merge not flagged");
+    assert!(
+        merge.contains(r#""opening":[1]"#),
+        "the merge should open lane 1: {}",
+        merge
+    );
+
+    let root = out
+        .lines()
+        .find(|l| l.contains("chore: init"))
+        .expect("the root commit is present");
+    assert!(root.contains(r#""merge":false"#));
+    assert!(
+        root.contains(r#""parents":[]"#),
+        "the root has no parents: {}",
+        root
+    );
+}
+
+#[test]
+fn who_json_reports_counts_and_the_sparkline_scale() {
+    let f = repo();
+    let out = f.ok(&["who", "--json"]);
+    assert_eq!(out.lines().count(), 2, "two authors");
+    let alice = out.lines().find(|l| l.contains("Alice")).unwrap();
+    assert!(alice.contains(&format!(r#""commits":{}"#, ALICE_COMMITS)));
+    assert!(
+        alice.contains(r#""bucket_seconds":"#),
+        "the sparkline scale must be stated, not implied: {}",
+        alice
+    );
+    assert!(alice.contains(r#""activity":["#));
+    assert!(
+        !alice.contains(r#""added":"#),
+        "line counts are opt-in via --lines"
+    );
+    assert!(f.ok(&["who", "--lines", "--json"]).contains(r#""added":"#));
+}
+
+#[test]
+fn branches_json_marks_the_current_branch() {
+    let f = repo();
+    let out = f.ok(&["branches", "--json"]);
+    assert_eq!(out.lines().count(), 3);
+    assert_eq!(
+        out.lines()
+            .filter(|l| l.contains(r#""current":true"#))
+            .count(),
+        1,
+        "exactly one branch is checked out"
+    );
+}
+
+/// Returns the maximum brace depth, or `None` if the braces never balance.
+/// Quotes and escapes are honoured so a `{` inside a subject does not count.
+fn balanced_braces(s: &str) -> Option<usize> {
+    let (mut depth, mut max, mut in_str, mut escaped) = (0i32, 0usize, false, false);
+    for ch in s.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_str => escaped = true,
+            '"' => in_str = !in_str,
+            '{' if !in_str => {
+                depth += 1;
+                max = max.max(depth as usize);
+            }
+            '}' if !in_str => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 && !in_str {
+        Some(max)
+    } else {
+        None
+    }
+}
