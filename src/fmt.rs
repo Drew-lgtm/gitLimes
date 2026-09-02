@@ -52,6 +52,19 @@ pub fn sparkline(counts: &[u32]) -> String {
         .collect()
 }
 
+/// A duration as a compact label: `3d`, `2w`, `6mo`, `1y`. Used to say what one
+/// sparkline block is worth, so the scale is never left implicit.
+pub fn span_label(secs: i64) -> String {
+    const DAY: i64 = 86_400;
+    match secs {
+        s if s < DAY => format!("{}h", (s / 3_600).max(1)),
+        s if s < 14 * DAY => format!("{}d", s / DAY),
+        s if s < 60 * DAY => format!("{}w", s / (7 * DAY)),
+        s if s < 730 * DAY => format!("{}mo", (s / (30 * DAY)).max(1)),
+        s => format!("{}y", s / (365 * DAY)),
+    }
+}
+
 /// Seconds since the unix epoch, or 0 if the clock is before it.
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
@@ -137,5 +150,15 @@ mod tests {
     fn parse_ts_tolerates_garbage() {
         assert_eq!(parse_ts("1700000000"), 1700000000);
         assert_eq!(parse_ts("nonsense"), 0);
+    }
+
+    #[test]
+    fn span_label_names_the_block_width() {
+        let day = 86_400;
+        assert_eq!(span_label(3 * day), "3d");
+        assert_eq!(span_label(21 * day), "3w");
+        assert_eq!(span_label(90 * day), "3mo");
+        assert_eq!(span_label(1095 * day), "3y");
+        assert_eq!(span_label(600), "1h", "sub-hour spans still get a unit");
     }
 }

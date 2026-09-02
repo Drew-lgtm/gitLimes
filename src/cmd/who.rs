@@ -1,5 +1,5 @@
 use crate::cli;
-use gitlimes::fmt::{fit, now_secs, parse_ts, rel_compact, short_email, sparkline};
+use gitlimes::fmt::{fit, parse_ts, rel_compact, short_email, span_label, sparkline};
 use gitlimes::repo::{self, Records, WHO_FORMAT};
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RESET, YELLOW};
 use std::collections::HashMap;
@@ -18,13 +18,22 @@ OPTIONS:
         --all            include all refs, not just HEAD
     -h, --help           show this help
 
-The activity sparkline covers the last 12 months, one block per month.
+The activity sparkline spans the whole history shown, oldest block first.
 ";
 
-/// Buckets are 30-day windows counted back from now, which keeps the whole
-/// command to a single pass with no calendar arithmetic.
+/// The activity sparkline spans the whole history rather than a fixed recent
+/// window, so a repository that went quiet years ago still shows its shape
+/// instead of twelve blanks.
+///
+/// The span is not known up front - git yields commits newest first, so the
+/// oldest is seen last - and remembering every timestamp to find it would make
+/// memory scale with history, which is the one thing this tool does not do.
+/// Instead the buckets start one day wide and double whenever a commit falls
+/// off the left edge, merging neighbours as they go. That is a fixed
+/// `BUCKETS` slots per author, one pass, and it ends up spanning the full
+/// history at the coarsest resolution that fits.
 const BUCKETS: usize = 12;
-const BUCKET_SECS: i64 = 30 * 86_400;
+const START_WIDTH_SECS: i64 = 86_400;
 
 #[derive(Default)]
 struct Author {
@@ -115,8 +124,10 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
 
     // Bounded by the number of distinct authors, not by history length.
     let mut authors: HashMap<String, Author> = HashMap::new();
-    let now = now_secs();
     let mut total = 0u32;
+    // The newest commit anchors the sparkline; buckets grow to reach the oldest.
+    let mut anchor: Option<i64> = None;
+    let mut width = START_WIDTH_SECS;
 
     while let Some(record) = rec.next_record()? {
         // With --numstat, git appends this commit's stat lines after the
@@ -130,6 +141,23 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
             continue;
         };
         let ts = parse_ts(ts);
+
+        // Settle the scale before touching any author, so widening - which
+        // rewrites every author's buckets - has the map to itself.
+        //
+        // Author dates do not have to descend the way commit dates do, so a
+        // commit newer than the anchor is clamped into the first bucket rather
+        // than producing a negative index.
+        let anchor = *anchor.get_or_insert(ts);
+        let age = (anchor - ts).max(0);
+        while age / width >= BUCKETS as i64 {
+            for a in authors.values_mut() {
+                widen(&mut a.activity);
+            }
+            width *= 2;
+        }
+        let bucket = (age / width) as usize;
+
         let key = email.to_ascii_lowercase();
         let e = authors.entry(key).or_insert_with(|| Author {
             name: name.to_string(),
@@ -142,13 +170,8 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         total += 1;
         e.first = e.first.min(ts);
         e.last = e.last.max(ts);
-        let age = now - ts;
-        if age >= 0 {
-            let bucket = (age / BUCKET_SECS) as usize;
-            if bucket < BUCKETS {
-                e.activity[bucket] += 1;
-            }
-        }
+        e.activity[bucket.min(BUCKETS - 1)] += 1;
+
         if let Some(stats) = stats {
             let (a, r) = sum_numstat(stats);
             e.added += a;
@@ -202,7 +225,13 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     if o.lines {
         write!(w, "  {}  {}", fit("+LINES", 8), fit("-LINES", 8))?;
     }
-    writeln!(w, "  ACTIVITY (12mo, newest right)")?;
+    // Say what a block is worth: the scale adapts to the history, so leaving
+    // it implicit would make two repositories look comparable when they are not.
+    writeln!(
+        w,
+        "  ACTIVITY (oldest to newest, 1 block = {})",
+        span_label(width)
+    )?;
 
     for a in &list {
         let share = format!("{:.0}%", (a.commits as f64 / total as f64) * 100.0);
@@ -244,6 +273,16 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     w.flush()
 }
 
+/// Halves the resolution: each pair of neighbouring buckets becomes one, so the
+/// same slots now cover twice the time. Counts are preserved, never dropped.
+fn widen(activity: &mut [u32; BUCKETS]) {
+    let mut merged = [0u32; BUCKETS];
+    for i in 0..BUCKETS / 2 {
+        merged[i] = activity[2 * i] + activity[2 * i + 1];
+    }
+    *activity = merged;
+}
+
 /// numstat rows are `added<TAB>removed<TAB>path`, with `-` for binary files.
 fn sum_numstat(block: &str) -> (u64, u64) {
     let mut added = 0;
@@ -257,4 +296,50 @@ fn sum_numstat(block: &str) -> (u64, u64) {
         removed += r.parse::<u64>().unwrap_or(0);
     }
     (added, removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn widening_halves_resolution_without_losing_commits() {
+        let mut a = [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let before: u32 = a.iter().sum();
+        widen(&mut a);
+        assert_eq!(a[..6], [3, 7, 11, 15, 19, 23], "neighbours merge in pairs");
+        assert_eq!(a[6..], [0; 6], "the freed half is cleared");
+        assert_eq!(a.iter().sum::<u32>(), before, "no commit is dropped");
+    }
+
+    #[test]
+    fn repeated_widening_still_conserves_the_total() {
+        let mut a = [0u32; BUCKETS];
+        a[0] = 5;
+        a[BUCKETS - 1] = 7;
+        for _ in 0..4 {
+            widen(&mut a);
+        }
+        assert_eq!(a.iter().sum::<u32>(), 12);
+        assert_eq!(a[0], 12, "everything collapses into the newest bucket");
+    }
+
+    /// The scale must be chosen so the oldest commit lands inside the window.
+    #[test]
+    fn buckets_widen_until_the_whole_span_fits() {
+        let day = 86_400i64;
+        for span_days in [1i64, 5, 30, 400, 4_000] {
+            let mut width = START_WIDTH_SECS;
+            while span_days * day / width >= BUCKETS as i64 {
+                width *= 2;
+            }
+            let bucket = span_days * day / width;
+            assert!(
+                bucket < BUCKETS as i64,
+                "a {}-day span still overflows at width {}",
+                span_days,
+                width
+            );
+        }
+    }
 }
