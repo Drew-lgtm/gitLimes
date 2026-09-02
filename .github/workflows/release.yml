@@ -1,0 +1,137 @@
+name: Release
+
+# Tagging v0.1.0 (or any v*.*.*) builds binaries for every supported platform
+# and attaches them to a GitHub Release. Most people will not install a Rust
+# toolchain to try a CLI, so a prebuilt binary is the difference between the
+# tool being usable and being theoretical.
+#
+# Publishing to crates.io is deliberately NOT automated: a published version can
+# never be deleted, only yanked, so it stays a manual, considered act.
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build a release for"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: create release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # Created once, up front: the build jobs run in parallel and would race
+      # if each tried to create it.
+      - name: Create the release if it does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+
+  build:
+    name: ${{ matrix.name }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # A binary that cannot run is worse than no binary. Native targets are
+      # smoke-tested here; the cross-compiled one is only checked for existence.
+      - name: Verify the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/gitlimes"
+          [ "$RUNNER_OS" = "Windows" ] && BIN="$BIN.exe"
+          test -f "$BIN"
+          if [ "${{ matrix.target }}" != "x86_64-apple-darwin" ] || [ "$(uname -m)" = "x86_64" ]; then
+            "$BIN" --version
+            "$BIN" log -n 3 --no-color
+          else
+            echo "cross-compiled for ${{ matrix.target }}; skipping execution"
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.create-release.outputs.tag }}"
+          STAGE="gitlimes-${TAG}-${{ matrix.name }}"
+          mkdir "$STAGE"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/gitlimes.exe" "$STAGE/"
+          else
+            cp "target/${{ matrix.target }}/release/gitlimes" "$STAGE/"
+          fi
+          cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
+
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "$STAGE.zip" "$STAGE" >/dev/null
+            echo "ASSET=$STAGE.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$STAGE.tar.gz" "$STAGE"
+            echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      # Checksums let people verify a download they did not build themselves.
+      - name: Checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$ASSET" > "$ASSET.sha256"
+          else
+            shasum -a 256 "$ASSET" > "$ASSET.sha256"
+          fi
+          cat "$ASSET.sha256"
+
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.create-release.outputs.tag }}" "$ASSET" "$ASSET.sha256" --clobber

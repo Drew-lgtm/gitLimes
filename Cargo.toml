@@ -2,10 +2,21 @@
 name = "gitlimes"
 version = "0.1.0"
 edition = "2021"
-description = "Fast, low-memory git history CLI"
+description = "Fast, low-memory git history CLI: colored log, branches, author stats and a unicode commit graph"
 # std::iter::repeat_n (fmt.rs) is the newest std API in use and sets this floor.
 # CI builds and tests on exactly this toolchain so the claim stays honest.
 rust-version = "1.82"
+authors = ["Ondrej Martinek"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/Drew-lgtm/gitLimes"
+homepage = "https://github.com/Drew-lgtm/gitLimes"
+documentation = "https://docs.rs/gitlimes"
+keywords = ["git", "cli", "log", "graph", "history"]
+categories = ["command-line-utilities", "development-tools"]
+# Keep the published package to the crate itself; CI config and the test
+# fixtures are not useful to someone installing the binary.
+exclude = [".github/", ".gitattributes"]
 
 [dependencies]
 
