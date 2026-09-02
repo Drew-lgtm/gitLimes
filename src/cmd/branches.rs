@@ -1,6 +1,7 @@
 use crate::cli;
 use gitlimes::fmt::{fit, parse_ts, rel_compact};
 use gitlimes::json::Obj;
+use gitlimes::pager;
 use gitlimes::repo;
 use gitlimes::style::{c, BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use std::io::{self, Write};
@@ -165,8 +166,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     }
 
     if o.json {
-        let stdout = io::stdout();
-        let mut w = io::BufWriter::new(stdout.lock());
+        let mut w = pager::out();
         for b in &branches {
             let mut o = Obj::new();
             o.str("name", &b.name)
@@ -177,7 +177,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
                 .str("subject", &b.subject);
             writeln!(w, "{}", o.finish())?;
         }
-        return w.flush();
+        return w.finish();
     }
 
     let name_w = branches
@@ -196,8 +196,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     let now = gitlimes::fmt::now_secs();
     let stale_cutoff = o.stale_days.map(|d| now - d * 86_400);
 
-    let stdout = io::stdout();
-    let mut w = io::BufWriter::new(stdout.lock());
+    let mut w = pager::out();
 
     for b in &branches {
         let stale = stale_cutoff.is_some_and(|cut| b.ts < cut);
@@ -235,7 +234,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         }
         writeln!(w, "  {}{}{}", c(DIM), b.subject, c(RESET))?;
     }
-    w.flush()
+    w.finish()
 }
 
 /// `%(upstream:track)` is formatted for humans as `[ahead 2, behind 1]`; strip

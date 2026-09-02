@@ -15,6 +15,7 @@ COMMANDS:
 
 GLOBAL OPTIONS:
     --color / --no-color    override tty colour detection
+    --pager / --no-pager    override tty pager detection
     -h, --help              show help for a command
     -V, --version           print version
 ";
@@ -49,4 +50,22 @@ pub fn take_color(args: &mut Vec<String>) -> Option<bool> {
         _ => true,
     });
     force
+}
+
+/// Pulls the global pager flags out of the argument list, mirroring
+/// `take_color`, so `--no-pager` works in any position.
+pub fn take_pager(args: &mut Vec<String>) -> gitlimes::pager::Mode {
+    let mut mode = gitlimes::pager::Mode::Auto;
+    args.retain(|a| match a.as_str() {
+        "--pager" => {
+            mode = gitlimes::pager::Mode::Always;
+            false
+        }
+        "--no-pager" => {
+            mode = gitlimes::pager::Mode::Never;
+            false
+        }
+        _ => true,
+    });
+    mode
 }

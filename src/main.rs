@@ -4,7 +4,7 @@
 mod cli;
 mod cmd;
 
-use gitlimes::style;
+use gitlimes::{pager, style};
 use std::io::ErrorKind;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -13,6 +13,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let force_color = cli::take_color(&mut args);
     style::init(force_color);
+    pager::init(cli::take_pager(&mut args));
 
     if args.is_empty() {
         print!("{}", cli::USAGE);
