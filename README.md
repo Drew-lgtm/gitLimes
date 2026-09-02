@@ -1,5 +1,7 @@
 # gitlimes
 
+[![CI](https://github.com/Drew-lgtm/gitLimes/actions/workflows/ci.yml/badge.svg)](https://github.com/Drew-lgtm/gitLimes/actions/workflows/ci.yml)
+
 *limes — the fortified frontier of the Roman empire; the line that shows you where the borders ran.*
 
 A fast, low-memory CLI for asking a git repository what happened and who did it.
@@ -124,6 +126,44 @@ alias limes=gitlimes
 cargo test
 ```
 
-The graph algorithm is the part worth testing and carries most of the suite: lane assignment for
-linear history, merges, octopus merges, fork folding, lane reuse and compaction, plus rendering
-tests that pin the exact glyph output for each case.
+50 tests in two layers.
+
+**20 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
+merges, fork folding, lane reuse and compaction; rendering tests that pin the exact glyph output
+for each case; and column fitting, relative dates and sparklines.
+
+**30 integration tests** run the real built binary against a real git repository. That is the only
+way to cover the streaming record reader in `repo.rs` and the hand-rolled argument parsing, so
+they carry the claims that matter: that commit order matches git's, that a subject containing a
+pipe, quotes, a backslash and non-ASCII text survives the field-separated record format, that a
+multi-line commit body never leaks into the output, that colour is off when stdout is a pipe, and
+that every command exits non-zero with a readable message outside a repository.
+
+The fixture builds a repository with a known merge topology and pins everything that would
+otherwise vary per machine: no system or global git config, an explicit author, committer and
+date on every single call, no signing, and an explicit default branch. Forcing the identity on
+*every* call — not just on `git commit` — matters more than it looks: with no configured user git
+quietly invents one from the OS username and hostname, so an unattributed `git merge` is authored
+by whoever ran the tests and `who` reports a phantom extra author that differs per machine.
+
+Tests never ship. `#[cfg(test)]` compiles them out entirely, and the integration tests live in
+`tests/`, which is only built by `cargo test` — the release binary contains no test code at all.
+
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request to
+`main`:
+
+- **fmt + clippy** — `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
+- **test** — the full suite on `ubuntu-latest`, `macos-latest` and `windows-latest`. This is what
+  actually earns the cross-platform claim; the project is developed on Windows, so Linux and macOS
+  are otherwise untested.
+- **smoke test** — builds the release binary (which `cargo test` never exercises, since it tests
+  the debug build) and runs every subcommand against *this repository's own history*, checked out
+  at full depth. gitlimes is built from `--no-ff` merges, so the graph must contain a merge dot;
+  if lane rendering regresses, the job fails.
+- **msrv** — builds and tests on the exact toolchain named by `rust-version` in `Cargo.toml`, so
+  the stated minimum stays true rather than aspirational.
+
+There is no dependency cache: with zero dependencies a cold build takes seconds, and restoring a
+cache would cost more time than it saves.
