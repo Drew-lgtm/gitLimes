@@ -85,13 +85,16 @@ impl Records {
         })
     }
 
-    /// Next record, or `None` at end of stream. The returned string borrows the
-    /// internal buffer and is invalidated by the following call.
+    /// Next record, or `None` at end of stream.
+    ///
+    /// Deliberately not `Iterator`: the returned string borrows the internal
+    /// buffer and is invalidated by the following call, which no iterator
+    /// signature can express.
     ///
     /// Blank records are skipped rather than reported as end-of-stream: a
     /// format that leads with the separator emits an empty first record, and
     /// git pads records with newlines.
-    pub fn next(&mut self) -> io::Result<Option<Cow<'_, str>>> {
+    pub fn next_record(&mut self) -> io::Result<Option<Cow<'_, str>>> {
         let start;
         loop {
             self.buf.clear();
