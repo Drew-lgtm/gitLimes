@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Backtraces cost nothing here and turn a bare "panicked" into a usable report.
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      # --all-targets so the test code is linted too, not just the binary.
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the other platforms when one fails - which one broke is
+      # the whole point of the matrix.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # Full history: the smoke test runs gitlimes against this very repository,
+      # and the default shallow clone has no merges to draw.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Show tool versions
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          git --version
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      # `cargo test` exercises the debug binary. This proves the release build -
+      # the one users actually run, with LTO and panic=abort - works too, and
+      # does it against real history rather than a fixture.
+      - name: Smoke test the release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BIN="$PWD/target/release/gitlimes"
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN="$BIN.exe"; fi
+          test -x "$BIN" || { echo "release binary not found at $BIN"; exit 1; }
+
+          "$BIN" --version
+
+          echo "::group::log"
+          "$BIN" log -n 5 --no-color | tee log.txt
+          test -s log.txt || { echo "log produced no output"; exit 1; }
+          echo "::endgroup::"
+
+          echo "::group::branches"
+          "$BIN" branches --no-color
+          echo "::endgroup::"
+
+          echo "::group::who"
+          "$BIN" who --no-color | tee who.txt
+          grep -q "COMMITS" who.txt || { echo "who is missing its header"; exit 1; }
+          echo "::endgroup::"
+
+          echo "::group::graph"
+          # The unicode run must not crash; the assertion uses --ascii so it
+          # cannot be tripped up by console encoding differences.
+          "$BIN" graph -n 20 --no-color
+          "$BIN" graph -n 20 --ascii --no-color | tee graph.txt
+          echo "::endgroup::"
+
+          # gitlimes' own history is built from --no-ff merges, so a merge dot
+          # must appear. If it does not, lane rendering has regressed.
+          grep -qE '^o' graph.txt || { echo "no merge dot (o) in the graph"; cat graph.txt; exit 1; }
+
+          # Colour must stay off when stdout is a pipe, on every platform.
+          if "$BIN" log -n 1 | grep -q $'\033'; then
+            echo "ANSI escapes leaked into piped output"; exit 1
+          fi
+
+          echo "::group::exit codes"
+          if "$BIN" bogus >/dev/null 2>&1; then echo "unknown command should fail"; exit 1; fi
+          if "$BIN" log --nope >/dev/null 2>&1; then echo "unknown flag should fail"; exit 1; fi
+          ( cd "$RUNNER_TEMP" && if "$BIN" log >/dev/null 2>&1; then
+              echo "should fail outside a repository"; exit 1; fi )
+          echo "::endgroup::"
+
+          rm -f log.txt who.txt graph.txt
+          echo "smoke test passed on $RUNNER_OS"
+
+      - name: Report binary size
+        shell: bash
+        run: |
+          BIN="target/release/gitlimes"
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN="$BIN.exe"; fi
+          ls -l "$BIN"
+
+  msrv:
+    name: minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned as rust-version in Cargo.toml. std::iter::repeat_n is the newest
+      # std API in use and is what sets this floor.
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: echo "version=$(grep '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust ${{ steps.msrv.outputs.version }}
+        run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal --no-self-update
+
+      - name: Build and test on the MSRV toolchain
+        run: |
+          cargo +${{ steps.msrv.outputs.version }} build --locked
+          cargo +${{ steps.msrv.outputs.version }} test --locked

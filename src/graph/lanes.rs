@@ -89,7 +89,10 @@ impl Lanes {
     /// it, closed lanes would leave holes and the drawing would drift right.
     #[cfg(test)]
     pub fn width(&self) -> usize {
-        self.slots.iter().rposition(|s| s.is_some()).map_or(0, |i| i + 1)
+        self.slots
+            .iter()
+            .rposition(|s| s.is_some())
+            .map_or(0, |i| i + 1)
     }
 
     pub fn advance(&mut self, hash: &str, parents: &[&str]) -> Step {
@@ -105,7 +108,11 @@ impl Lanes {
         // folds into this column.
         let mut closing = Vec::new();
         for j in 0..self.slots.len() {
-            if j != col && self.slots[j].as_ref().is_some_and(|l| l.waiting_for == hash) {
+            if j != col
+                && self.slots[j]
+                    .as_ref()
+                    .is_some_and(|l| l.waiting_for == hash)
+            {
                 self.slots[j] = None;
                 closing.push(j);
             }

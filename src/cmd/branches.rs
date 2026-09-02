@@ -81,7 +81,12 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         }
     };
 
-    let mut argv: Vec<&str> = vec!["for-each-ref", FIELDS, "--sort=-committerdate", "refs/heads"];
+    let mut argv: Vec<&str> = vec![
+        "for-each-ref",
+        FIELDS,
+        "--sort=-committerdate",
+        "refs/heads",
+    ];
     if o.all {
         argv.push("refs/remotes");
     }
@@ -93,14 +98,9 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
             continue;
         }
         let mut f = line.split(repo::FS);
-        let (Some(head), Some(name), Some(ts), Some(author), Some(track), Some(subject)) = (
-            f.next(),
-            f.next(),
-            f.next(),
-            f.next(),
-            f.next(),
-            f.next(),
-        ) else {
+        let (Some(head), Some(name), Some(ts), Some(author), Some(track), Some(subject)) =
+            (f.next(), f.next(), f.next(), f.next(), f.next(), f.next())
+        else {
             continue;
         };
         // for-each-ref lists the symbolic HEAD alongside real branches.

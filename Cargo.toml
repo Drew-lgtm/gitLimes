@@ -3,6 +3,9 @@ name = "gitlimes"
 version = "0.1.0"
 edition = "2021"
 description = "Fast, low-memory git history CLI"
+# std::iter::repeat_n (fmt.rs) is the newest std API in use and sets this floor.
+# CI builds and tests on exactly this toolchain so the claim stays honest.
+rust-version = "1.82"
 
 [dependencies]
 

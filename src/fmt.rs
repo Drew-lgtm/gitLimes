@@ -12,7 +12,7 @@ pub fn fit(s: &str, w: usize) -> String {
     if n < w {
         let mut out = String::with_capacity(s.len() + (w - n));
         out.push_str(s);
-        out.extend(std::iter::repeat(' ').take(w - n));
+        out.extend(std::iter::repeat_n(' ', w - n));
         return out;
     }
     if w == 0 {
@@ -28,7 +28,9 @@ pub fn short_email(email: &str) -> &str {
     email.split('@').next().unwrap_or(email)
 }
 
-const BLOCKS: [char; 8] = ['\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}', '\u{2588}'];
+const BLOCKS: [char; 8] = [
+    '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}', '\u{2588}',
+];
 
 /// Renders counts as a sparkline. An all-zero series renders as blanks rather
 /// than a flat bar, so gaps in activity read as gaps.

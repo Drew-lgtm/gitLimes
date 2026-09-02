@@ -14,8 +14,7 @@ pub const FS: char = '\u{1f}';
 pub const RS: u8 = 0x1e;
 
 /// Field order must match `Commit::parse`.
-pub const LOG_FORMAT: &str =
-    "--format=%H%x1f%h%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e";
+pub const LOG_FORMAT: &str = "--format=%H%x1f%h%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e";
 
 /// Leading separator, used when git appends extra lines after each record
 /// (`--numstat`). Those lines then arrive at the head of the *next* record,
