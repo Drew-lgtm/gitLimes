@@ -78,13 +78,16 @@ impl Lanes {
         Lanes::default()
     }
 
-    /// Number of currently open lanes. This is the whole of the graph's state.
+    /// Number of currently open lanes. This is the whole of the graph's state,
+    /// and the tests assert on it to pin the memory invariant.
+    #[cfg(test)]
     pub fn open(&self) -> usize {
         self.slots.iter().filter(|s| s.is_some()).count()
     }
 
     /// Highest column in use. Compaction keeps this close to `open()`; without
     /// it, closed lanes would leave holes and the drawing would drift right.
+    #[cfg(test)]
     pub fn width(&self) -> usize {
         self.slots.iter().rposition(|s| s.is_some()).map_or(0, |i| i + 1)
     }

@@ -15,7 +15,7 @@ pub const RS: u8 = 0x1e;
 
 /// Field order must match `Commit::parse`.
 pub const LOG_FORMAT: &str =
-    "--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%ar%x1f%D%x1f%s%x1e";
+    "--format=%H%x1f%h%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e";
 
 /// Leading separator, used when git appends extra lines after each record
 /// (`--numstat`). Those lines then arrive at the head of the *next* record,
@@ -28,9 +28,7 @@ pub struct Commit<'a> {
     pub short: &'a str,
     pub parents: &'a str,
     pub author: &'a str,
-    pub email: &'a str,
     pub timestamp: &'a str,
-    pub relative: &'a str,
     pub refs: &'a str,
     pub subject: &'a str,
 }
@@ -43,9 +41,7 @@ impl<'a> Commit<'a> {
             short: f.next()?,
             parents: f.next()?,
             author: f.next()?,
-            email: f.next()?,
             timestamp: f.next()?,
-            relative: f.next()?,
             refs: f.next()?,
             subject: f.next()?,
         })
