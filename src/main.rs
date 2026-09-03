@@ -47,6 +47,12 @@ fn main() {
         if e.kind() == ErrorKind::BrokenPipe {
             std::process::exit(0);
         }
+        // Deciding the process exit code is the binary's job, not the
+        // library's. git has already explained itself on stderr, so exit with
+        // its code and add nothing.
+        if let Some(code) = gitlimes::repo::git_exit_code(&e) {
+            std::process::exit(code);
+        }
         eprintln!("gitlimes: {}", e);
         std::process::exit(1);
     }
