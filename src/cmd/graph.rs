@@ -66,9 +66,18 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
                 return Ok(None);
             }
             "-n" | "--max-count" => o.max = Some(value(&mut it)?),
-            "-a" | "--all" => o.all = true,
-            "--ascii" => o.ascii = true,
-            "--json" => o.json = true,
+            "-a" | "--all" => {
+                cli::no_value(&key, &inline)?;
+                o.all = true
+            }
+            "--ascii" => {
+                cli::no_value(&key, &inline)?;
+                o.ascii = true
+            }
+            "--json" => {
+                cli::no_value(&key, &inline)?;
+                o.json = true
+            }
             "--since" => o.since = Some(value(&mut it)?),
             "--author" => o.author = Some(value(&mut it)?),
             s if s.starts_with('-') => return Err(cli::Unknown(s.to_string()).to_string()),

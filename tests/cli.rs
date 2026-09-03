@@ -5,8 +5,8 @@
 mod fixture;
 
 use fixture::{
-    empty_repo, graph_shape, has_ansi, non_repo, repo, strip_ansi, ALICE_COMMITS, BOB_COMMITS,
-    BODY_MARKER, MAIN_COMMITS, SIDE_BRANCH, TRICKY_SUBJECT,
+    empty_repo, graph_shape, has_ansi, non_repo, repo, strip_ansi, Fixture, ALICE_COMMITS,
+    BOB_COMMITS, BODY_MARKER, MAIN_COMMITS, SIDE_BRANCH, TRICKY_SUBJECT,
 };
 
 // ---------------------------------------------------------------- fixture
@@ -902,4 +902,114 @@ fn the_key_scanner_reads_keys_and_not_values() {
         "punctuation inside a string must not confuse the scan"
     );
     assert!(top_level_keys("{}").is_empty());
+}
+
+// --------------------------------------------------- audit regressions
+
+#[test]
+fn a_zero_limit_prints_a_header_instead_of_crashing() {
+    // `--limit 0` is accepted by the parser, so it must not then panic. The
+    // guard against an empty author list ran before the truncation that
+    // emptied it.
+    let f = repo();
+    let out = f.run(&["who", "--limit", "0", "--no-color", "--no-pager"]);
+    assert!(
+        out.status.success(),
+        "who --limit 0 exited {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(f.run(&["who", "--limit=0"]).status.success());
+}
+
+#[test]
+fn stale_rejects_values_that_cannot_mean_a_threshold() {
+    // A negative threshold puts the cutoff in the future and marks everything
+    // stale; a huge one overflowed the multiply into seconds.
+    let f = repo();
+    for bad in ["-1", "999999999999999", "1.5", "abc"] {
+        let out = f.run(&["branches", "--stale", bad, "--no-color", "--no-pager"]);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "--stale {} should be rejected, got {:?}",
+            bad,
+            out.status.code()
+        );
+    }
+    assert!(f.run(&["branches", "--stale", "0"]).status.success());
+    assert!(f
+        .run(&["branches", "--stale", "4294967295"])
+        .status
+        .success());
+}
+
+#[test]
+fn global_flags_do_not_eat_operands_after_a_double_dash() {
+    // A path may legitimately be spelled `--color`. Stripping it as a global
+    // flag both changed the colour and silently dropped the path filter.
+    let f = repo();
+    let out = f.run(&["log", "--no-color", "--", "--color"]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !has_ansi(&text),
+        "the operand was consumed as a colour flag"
+    );
+    assert!(
+        text.trim().is_empty(),
+        "no commit touches a path named --color, got: {}",
+        text
+    );
+
+    let paged = f.run(&["log", "--no-pager", "--", "--pager"]);
+    assert!(paged.status.success());
+    assert!(String::from_utf8_lossy(&paged.stdout).trim().is_empty());
+}
+
+#[test]
+fn boolean_flags_reject_an_inline_value() {
+    // `--json=false` silently enabled JSON, because the value was parsed off
+    // and then discarded.
+    let f = repo();
+    for bad in ["--json=false", "--oneline=no", "--all=0"] {
+        let out = f.run(&["log", bad, "--no-color", "--no-pager"]);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "log {} should be rejected, got {:?}",
+            bad,
+            out.status.code()
+        );
+    }
+    assert!(f.run(&["branches", "--json=false"]).status.code() == Some(2));
+    assert!(f.run(&["who", "--lines=maybe"]).status.code() == Some(2));
+    assert!(f.run(&["graph", "--ascii=yes"]).status.code() == Some(2));
+}
+
+#[test]
+fn only_the_checked_out_commit_is_marked_head() {
+    // `head` came from a substring test, so `origin/HEAD` and any branch named
+    // like HEAD also claimed to be checked out.
+    let f = Fixture::new("head-substring");
+    f.git(&["branch", "HEADROOM", "main~2"]);
+    f.git(&["branch", "SUBHEADING", "main~3"]);
+
+    let out = f.ok(&["log", "--all", "--json"]);
+    let marked: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains(r#""head":true"#))
+        .collect();
+    assert_eq!(
+        marked.len(),
+        1,
+        "exactly one commit is checked out, got {}:\n{}",
+        marked.len(),
+        marked.join("\n")
+    );
+    assert!(
+        marked[0].contains("chore: release"),
+        "the wrong commit was marked: {}",
+        marked[0]
+    );
 }

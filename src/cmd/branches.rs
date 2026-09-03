@@ -59,7 +59,7 @@ struct Branch {
 #[derive(Default)]
 struct Opts {
     all: bool,
-    stale_days: Option<i64>,
+    stale_days: Option<u32>,
     vs: Option<String>,
     json: bool,
 }
@@ -81,16 +81,25 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
                 print!("{}", HELP);
                 return Ok(None);
             }
-            "-a" | "--all" => o.all = true,
+            "-a" | "--all" => {
+                cli::no_value(&key, &inline)?;
+                o.all = true
+            }
             "--stale" => {
                 let v = value(&mut it)?;
-                o.stale_days = Some(
-                    v.parse::<i64>()
-                        .map_err(|_| format!("--stale expects a number of days, got '{}'", v))?,
-                );
+                // u32 rather than i64: a negative threshold would put the cutoff
+                // in the future and mark every branch stale, and the widest u32
+                // still cannot overflow when multiplied out to seconds.
+                o.stale_days =
+                    Some(v.parse::<u32>().map_err(|_| {
+                        format!("--stale expects a whole number of days, got '{}'", v)
+                    })?);
             }
             "--vs" => o.vs = Some(value(&mut it)?),
-            "--json" => o.json = true,
+            "--json" => {
+                cli::no_value(&key, &inline)?;
+                o.json = true
+            }
             s => return Err(cli::Unknown(s.to_string()).to_string()),
         }
     }
@@ -194,7 +203,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         .min(20);
 
     let now = gitlimes::fmt::now_secs();
-    let stale_cutoff = o.stale_days.map(|d| now - d * 86_400);
+    let stale_cutoff = o.stale_days.map(|d| now - i64::from(d) * 86_400);
 
     let mut w = pager::out();
 

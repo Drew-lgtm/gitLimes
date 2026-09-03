@@ -40,6 +40,10 @@ pub struct Glyphs {
     pub tee_right: char,
     pub tee_left: char,
     pub tee_both: char,
+    /// A lane starting here while the connector continues past it.
+    pub tee_down: char,
+    /// A lane ending here while the connector continues past it.
+    pub tee_up: char,
 }
 
 pub const UNICODE: Glyphs = Glyphs {
@@ -56,6 +60,8 @@ pub const UNICODE: Glyphs = Glyphs {
     tee_right: '\u{251c}',
     tee_left: '\u{2524}',
     tee_both: '\u{253c}',
+    tee_down: '\u{252c}',
+    tee_up: '\u{2534}',
 };
 
 pub const ASCII: Glyphs = Glyphs {
@@ -72,6 +78,8 @@ pub const ASCII: Glyphs = Glyphs {
     tee_right: '+',
     tee_left: '+',
     tee_both: '+',
+    tee_down: '+',
+    tee_up: '+',
 };
 
 /// A row of glyphs plus the lane colour each one should be painted in.
@@ -244,18 +252,39 @@ fn connect(
 ) {
     let col = step.col;
     let color = step.dot_color;
-    let mut any_left = false;
-    let mut any_right = false;
 
+    // Every horizontal first. Drawing a corner and then running another
+    // target's horizontal over it is how an octopus merge used to lose the
+    // connector for every lane except its farthest.
     for &k in targets {
         run(grid, g, col, k, color);
+    }
+
+    // Only the lane at the end of a run gets a corner; the connector passes
+    // straight through the ones in between, so those get a tee.
+    let end_right = targets.iter().copied().filter(|k| *k > col).max();
+    let end_left = targets.iter().copied().filter(|k| *k < col).min();
+
+    for &k in targets {
         let right = k > col;
-        let corner = if occupied(existing, k) && !folding {
+        let at_end = if right {
+            Some(k) == end_right
+        } else {
+            Some(k) == end_left
+        };
+        let glyph = if occupied(existing, k) && !folding {
             // The lane was already open and keeps going, so the edge joins it.
             if right {
                 g.tee_left
             } else {
                 g.tee_right
+            }
+        } else if !at_end {
+            // The connector continues past this lane.
+            if folding {
+                g.tee_up
+            } else {
+                g.tee_down
             }
         } else if folding {
             if right {
@@ -268,15 +297,10 @@ fn connect(
         } else {
             g.branch_left
         };
-        grid.put(cell(k), corner, color);
-        if right {
-            any_right = true;
-        } else {
-            any_left = true;
-        }
+        grid.put(cell(k), glyph, color);
     }
 
-    let junction = match (any_left, any_right) {
+    let junction = match (end_left.is_some(), end_right.is_some()) {
         (true, true) => g.tee_both,
         (false, true) => g.tee_right,
         (true, false) => g.tee_left,
@@ -398,5 +422,54 @@ mod tests {
         let mut l = Lanes::new();
         let s = l.advance("a", &["b"]);
         assert_eq!(commit_row(&s, &ASCII, 5), "*    ");
+    }
+}
+
+#[cfg(test)]
+mod octopus_tests {
+    use super::*;
+    use crate::graph::lanes::Lanes;
+
+    #[test]
+    fn every_opened_lane_gets_its_own_connector() {
+        // An octopus merge opens two lanes. Before the fix the horizontal drawn
+        // for the farther one overwrote the nearer one's corner, so a lane
+        // appeared on the next row with nothing joining it to its commit.
+        let mut l = Lanes::new();
+        let s = l.advance("m", &["p1", "p2", "p3"]);
+        assert_eq!(s.opening, vec![1, 2]);
+        assert_eq!(
+            branch_row(&s, &ASCII, 0).unwrap().trim_end(),
+            "+-+-\\",
+            "lane 1 must have a connector, not a bare horizontal"
+        );
+        let uni = branch_row(&s, &UNICODE, 0).unwrap();
+        assert!(
+            uni.contains('\u{252c}'),
+            "the intermediate lane should get a downward tee: {:?}",
+            uni.trim_end()
+        );
+    }
+
+    #[test]
+    fn every_folded_lane_gets_its_own_connector() {
+        let mut l = Lanes::new();
+        l.advance("m", &["a", "b", "c"]);
+        l.advance("a", &["z"]);
+        l.advance("b", &["z"]);
+        l.advance("c", &["z"]);
+        let s = l.advance("z", &[]);
+        assert_eq!(s.closing, vec![1, 2]);
+        assert_eq!(
+            fold_row(&s, &ASCII, 0).unwrap().trim_end(),
+            "+-+-/",
+            "lane 1 must have a connector, not a bare horizontal"
+        );
+        let uni = fold_row(&s, &UNICODE, 0).unwrap();
+        assert!(
+            uni.contains('\u{2534}'),
+            "the intermediate lane should get an upward tee: {:?}",
+            uni.trim_end()
+        );
     }
 }
