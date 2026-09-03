@@ -57,18 +57,58 @@ pub fn git(args: &[&str]) -> Command {
     c
 }
 
+/// Raised when git itself ran and exited non-zero.
+///
+/// git has already written its own diagnostic to stderr, so this carries only
+/// the code, for a caller that wants to exit with it. It travels inside an
+/// `io::Error` so every function here can keep returning `io::Result` - a
+/// library must never call `process::exit` and kill its caller.
+#[derive(Debug, Clone, Copy)]
+pub struct GitExit(pub i32);
+
+impl std::fmt::Display for GitExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "git exited with status {}", self.0)
+    }
+}
+
+impl std::error::Error for GitExit {}
+
+/// Recovers git's exit code from an error produced by this module, if that is
+/// what the error is.
+pub fn git_exit_code(e: &io::Error) -> Option<i32> {
+    e.get_ref()
+        .and_then(|inner| inner.downcast_ref::<GitExit>())
+        .map(|g| g.0)
+}
+
+fn spawn_error(e: io::Error) -> io::Error {
+    if e.kind() == io::ErrorKind::NotFound {
+        // The likeliest first-run failure by a wide margin, and the bare
+        // "program not found" says nothing about what to install.
+        return io::Error::new(
+            io::ErrorKind::NotFound,
+            "git was not found on PATH; gitlimes runs git and needs it installed",
+        );
+    }
+    e
+}
+
 /// Runs a git command and returns its whole stdout. Only for commands whose
 /// output is bounded by ref count, never by history length.
 pub fn capture(args: &[&str]) -> io::Result<String> {
-    let out = git(args).stderr(Stdio::inherit()).output()?;
+    let out = git(args)
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(spawn_error)?;
     if !out.status.success() {
-        std::process::exit(out.status.code().unwrap_or(1));
+        return Err(io::Error::other(GitExit(out.status.code().unwrap_or(1))));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Like [`capture`], but returns `None` instead of exiting when git fails, and
-/// swallows git's error message.
+/// Like [`capture`], but a non-zero exit is `None` rather than an error, and
+/// git's own message is swallowed.
 ///
 /// This is for *feature detection*: asking the installed git whether it
 /// supports something by trying it. That is more reliable than parsing
@@ -90,8 +130,16 @@ pub struct Records {
 
 impl Records {
     pub fn spawn(mut cmd: Command) -> io::Result<Records> {
-        let mut child = cmd.spawn()?;
-        let out = BufReader::with_capacity(64 * 1024, child.stdout.take().unwrap());
+        let mut child = cmd.spawn().map_err(spawn_error)?;
+        // Only `None` if the caller built a Command without a piped stdout.
+        // A library returns an error for that; it does not panic on its caller.
+        let stdout = child.stdout.take().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the command must be configured with a piped stdout; use repo::git()",
+            )
+        })?;
+        let out = BufReader::with_capacity(64 * 1024, stdout);
         Ok(Records {
             child,
             out,
@@ -133,13 +181,77 @@ impl Records {
         Ok(Some(String::from_utf8_lossy(&self.buf[start..])))
     }
 
-    /// Propagates git's exit code so `not a git repository` and friends surface
-    /// correctly. git has already printed its own message to our stderr.
+    /// Waits for git and reports its exit code as a [`GitExit`] error, so
+    /// `not a git repository` and friends surface correctly. git has already
+    /// printed its own message to our stderr.
     pub fn finish(mut self) -> io::Result<()> {
         let status = self.child.wait()?;
         if !status.success() {
-            std::process::exit(status.code().unwrap_or(1));
+            return Err(io::Error::other(GitExit(status.code().unwrap_or(1))));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_command_without_piped_stdout_errors_rather_than_panicking() {
+        // A library consumer can build its own Command. Getting that wrong must
+        // produce an error, not abort the caller's process.
+        let mut cmd = Command::new("git");
+        cmd.arg("--version");
+        let err = match Records::spawn(cmd) {
+            Ok(_) => panic!("spawn should reject a command without piped stdout"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("piped stdout"));
+    }
+
+    #[test]
+    fn a_missing_git_says_so_by_name() {
+        let mut cmd = Command::new("definitely-not-a-real-program-xyz");
+        cmd.stdout(Stdio::piped());
+        let err = match Records::spawn(cmd) {
+            Ok(_) => panic!("that program should not exist"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(
+            err.to_string().contains("git was not found on PATH"),
+            "unhelpful message: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn git_exit_code_round_trips_through_io_error() {
+        let e = io::Error::other(GitExit(128));
+        assert_eq!(git_exit_code(&e), Some(128));
+        // An unrelated error must not be mistaken for a git exit.
+        assert_eq!(git_exit_code(&io::Error::other("something else")), None);
+    }
+
+    #[test]
+    fn nothing_in_this_module_exits_the_process() {
+        // Guards the rule, not just today's code: a library that terminates the
+        // process kills any TUI or GUI that embeds it. Assembled at runtime so
+        // this test's own source cannot match itself.
+        let needle = format!("process{}exit", "::");
+        let src = include_str!("repo.rs");
+        // Only the real code; the test module below is allowed to mention it.
+        let code = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let offenders: Vec<&str> = code
+            .lines()
+            .filter(|l| l.contains(&needle) && !l.trim_start().starts_with("//"))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "the library must not exit the process: {:?}",
+            offenders
+        );
     }
 }
