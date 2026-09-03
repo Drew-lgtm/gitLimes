@@ -745,3 +745,161 @@ fn every_command_accepts_the_pager_flags() {
         );
     }
 }
+
+// ------------------------------------------------- json schema contract
+
+/// The published field names, per command. Renaming or removing any of these
+/// breaks every script written against the tool, silently and at a distance.
+///
+/// Adding a key is allowed by the contract, so a new one here is a prompt to
+/// update this list and note it in CHANGELOG.md - not a failure.
+#[test]
+fn json_field_names_are_a_stable_contract() {
+    let f = repo();
+
+    let cases: [(&[&str], &[&str], &[&str]); 4] = [
+        (
+            &["log", "-n", "1", "--json"],
+            &[
+                "hash", "short", "parents", "author", "date", "refs", "subject",
+            ],
+            &["head"],
+        ),
+        (
+            &["branches", "--json"],
+            &["name", "current", "date", "author", "subject"],
+            &["track"],
+        ),
+        (
+            &["who", "--json"],
+            &[
+                "name",
+                "email",
+                "commits",
+                "first",
+                "last",
+                "activity",
+                "bucket_seconds",
+            ],
+            &["added", "removed"],
+        ),
+        (
+            &["graph", "-n", "1", "--json"],
+            &[
+                "hash", "short", "parents", "author", "date", "refs", "subject", "graph",
+            ],
+            &["head"],
+        ),
+    ];
+
+    for (args, required, optional) in cases {
+        let out = f.ok(args);
+        let line = out.lines().next().expect("at least one record");
+        let keys = top_level_keys(line);
+
+        for key in required {
+            assert!(
+                keys.iter().any(|k| k == key),
+                "{:?} lost the required key {:?}; keys were {:?}",
+                args,
+                key,
+                keys
+            );
+        }
+        for key in &keys {
+            assert!(
+                required.contains(&key.as_str()) || optional.contains(&key.as_str()),
+                "{:?} grew an undocumented key {:?}: add it to this list and to CHANGELOG.md",
+                args,
+                key
+            );
+        }
+    }
+}
+
+#[test]
+fn graph_json_geometry_keys_are_stable() {
+    let f = repo();
+    let out = f.ok(&["graph", "-n", "1", "--json"]);
+    for key in ["col", "lanes", "merge", "closing", "opening", "shifts"] {
+        assert!(
+            out.contains(&format!("\"{}\":", key)),
+            "graph geometry lost {:?}; a renderer depends on it",
+            key
+        );
+    }
+}
+
+/// Top-level keys of a JSON object: the names before each `:` at depth 1.
+///
+/// Written by hand because the project has no dependencies. It tracks whether
+/// the next string is a key or a value, so `"author":"Alice"` yields `author`
+/// and not `Alice`, and it ignores anything nested or inside a string.
+fn top_level_keys(text: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    // Commas inside an array separate elements, not key/value pairs.
+    let mut array_depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    // At depth 1 a string is a key until a ':' says the next one is a value.
+    let mut next_string_is_key = false;
+
+    for ch in text.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if in_string {
+            match ch {
+                '\\' => escaped = true,
+                '"' => {
+                    in_string = false;
+                    if depth == 1 && next_string_is_key {
+                        keys.push(std::mem::take(&mut current));
+                    }
+                }
+                c => current.push(c),
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                current.clear();
+                in_string = true;
+            }
+            '{' => {
+                depth += 1;
+                next_string_is_key = depth == 1 && array_depth == 0;
+            }
+            '}' => depth -= 1,
+            '[' => {
+                array_depth += 1;
+                next_string_is_key = false;
+            }
+            ']' => array_depth -= 1,
+            ',' => next_string_is_key = depth == 1 && array_depth == 0,
+            ':' => next_string_is_key = false,
+            _ => {}
+        }
+    }
+    keys
+}
+
+#[test]
+fn the_key_scanner_reads_keys_and_not_values() {
+    // The contract test is only as trustworthy as this helper.
+    assert_eq!(
+        top_level_keys(r#"{"a":"x","b":1,"c":{"inner":2},"d":["e","f"]}"#),
+        vec!["a", "b", "c", "d"],
+        "nested keys and string values must not be counted"
+    );
+    assert_eq!(
+        top_level_keys(r#"{"tricky":"has : and , and \" inside"}"#),
+        vec!["tricky"],
+        "punctuation inside a string must not confuse the scan"
+    );
+    assert!(top_level_keys("{}").is_empty());
+}
