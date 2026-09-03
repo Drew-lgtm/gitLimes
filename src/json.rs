@@ -5,6 +5,23 @@
 //! the end, which means either buffering the whole result or emitting something
 //! that is invalid until the process exits. NDJSON stays streamable, survives
 //! `head`, and `jq -s` collects it into an array when a consumer wants one.
+//!
+//! # Schema stability
+//!
+//! There is deliberately **no version field** in the output. A version stamp on
+//! every line would cost bytes on every commit and, more to the point, would
+//! not prevent the failure it appears to guard against: the real risk is a
+//! field being renamed by accident, and a consumer reading `v` does not stop
+//! that. `tests/cli.rs` pins the exact key set of every command instead, so a
+//! rename fails CI rather than someone's script. The tool's own version, from
+//! `gitlimes --version`, identifies the format.
+//!
+//! The contract is **additive**: new fields may appear at any time, so
+//! consumers must ignore keys they do not recognise. Existing fields are not
+//! renamed, retyped or removed without a version bump that says so in
+//! CHANGELOG.md. Some keys are conditional and absent rather than null when
+//! they do not apply - `head` on a commit, `track` on a branch, `added` and
+//! `removed` without `--lines`.
 
 /// Appends `s` to `out` as a quoted JSON string.
 ///

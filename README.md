@@ -124,6 +124,19 @@ $ gitlimes who --json | jq -s 'map(select(.commits > 10))'
 That is what lets another renderer — an SVG export, a canvas, a TUI — draw the graph without
 re-deriving the layout.
 
+### Schema stability
+
+There is deliberately **no version field**. A stamp on every line would cost bytes on every
+record and would not prevent the failure it looks like it guards against — a field renamed by
+accident. [`tests/cli.rs`](tests/cli.rs) pins the exact key set of every command instead, so a
+rename fails CI rather than someone's script; `gitlimes --version` identifies the format.
+
+The contract is **additive**: new keys may appear in any release, so ignore keys you do not
+recognise; existing keys are not renamed, retyped or removed without a version bump recorded in
+[CHANGELOG.md](CHANGELOG.md). Conditional keys are absent rather than null — `head` on a commit,
+`track` on a branch, `added` and `removed` without `--lines`. The full key list per command is
+in the changelog.
+
 ## Use it as a library
 
 The reusable engine is a library; the CLI is one consumer of it. A TUI, a graphical front end or a
@@ -184,13 +197,13 @@ Windows `conhost`; Windows Terminal, macOS and Linux need nothing.
 cargo test
 ```
 
-80 tests in two layers.
+88 tests in two layers.
 
-**37 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
+**41 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
 merges, fork folding, lane reuse and compaction; rendering tests that pin the exact glyph output
 for each case; JSON escaping; pager resolution; and column fitting, relative dates and sparklines.
 
-**43 integration tests** run the real built binary against a real git repository. That is the only
+**46 integration tests** run the real built binary against a real git repository. That is the only
 way to cover the streaming record reader in `repo.rs` and the hand-rolled argument parsing, so
 they carry the claims that matter: that commit order matches git's, that a subject containing a
 pipe, quotes, a backslash and non-ASCII text survives the field-separated record format, that a
