@@ -64,9 +64,18 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
             "--author" => o.author = Some(value(&mut it)?),
             "--since" => o.since = Some(value(&mut it)?),
             "--until" => o.until = Some(value(&mut it)?),
-            "--all" => o.all = true,
-            "--oneline" => o.oneline = true,
-            "--json" => o.json = true,
+            "--all" => {
+                cli::no_value(&key, &inline)?;
+                o.all = true
+            }
+            "--oneline" => {
+                cli::no_value(&key, &inline)?;
+                o.oneline = true
+            }
+            "--json" => {
+                cli::no_value(&key, &inline)?;
+                o.json = true
+            }
             s if s.starts_with('-') => return Err(cli::Unknown(s.to_string()).to_string()),
             s => o.revs.push(s.to_string()),
         }
@@ -187,8 +196,10 @@ pub fn commit_json(commit: &Commit<'_>) -> Obj {
         .strs("refs", ref_names(commit.refs))
         .str("subject", commit.subject);
     // Which ref is checked out is lost once the decorations are stripped, and
-    // a consumer almost always wants it back.
-    if commit.refs.contains("HEAD") {
+    // a consumer almost always wants it back. Matched as a whole decoration:
+    // a substring test also fires on `origin/HEAD` and on any branch merely
+    // named something like `HEADROOM`.
+    if is_head(commit.refs) {
         o.bool("head", true);
     }
     o
@@ -204,4 +215,32 @@ fn ref_names(refs: &str) -> impl Iterator<Item = &str> {
             .strip_prefix("tag: ")
             .unwrap_or_else(|| r.rsplit(" -> ").next().unwrap_or(r))
     })
+}
+
+/// True when `%D` says this commit is the checked-out one: either `HEAD -> ref`
+/// on a branch, or a bare `HEAD` when detached.
+fn is_head(refs: &str) -> bool {
+    refs.split(", ")
+        .any(|r| r == "HEAD" || r.starts_with("HEAD -> "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_head;
+
+    #[test]
+    fn head_is_matched_as_a_decoration_not_a_substring() {
+        assert!(is_head("HEAD -> main, origin/main"));
+        assert!(is_head("HEAD"), "detached HEAD");
+        assert!(is_head("tag: v1.0, HEAD -> main"));
+
+        assert!(!is_head(""));
+        assert!(
+            !is_head("origin/HEAD"),
+            "a remote symbolic ref is not our HEAD"
+        );
+        assert!(!is_head("HEADROOM"), "a branch merely named like HEAD");
+        assert!(!is_head("main, origin/HEAD"));
+        assert!(!is_head("tag: SUBHEADING"));
+    }
 }

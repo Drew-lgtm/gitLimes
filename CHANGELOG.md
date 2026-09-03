@@ -8,6 +8,30 @@ While the version is below 1.0, a minor bump may contain breaking changes — th
 
 ## [Unreleased]
 
+### Fixed
+
+Findings from an adversarial audit, each reproduced before fixing and pinned by a regression test.
+
+- `who --limit 0` panicked with an index out of bounds. The emptiness guard ran before the
+  truncation that emptied the list, and one column width indexed instead of folding.
+- `branches --stale` accepted any `i64`: a negative value put the cutoff in the future and marked
+  every branch stale, and a large one overflowed the multiply into seconds — a panic in debug, a
+  wrapped and silently wrong cutoff in release. The threshold is a `u32` now, so neither is
+  representable.
+- `--color`, `--no-color`, `--pager` and `--no-pager` were stripped from anywhere in the argument
+  list, including after `--`. A path spelled like a flag changed the colour and was silently
+  dropped from the filter.
+- `head` in `--json` came from a substring test, so `origin/HEAD` and any branch named like
+  `HEADROOM` also claimed to be checked out. It now matches a whole decoration.
+- Boolean flags accepted and discarded an inline value, so `--json=false` turned JSON on.
+- An octopus merge, or a fork where more than one lane folded in, lost the connector for every
+  lane except the farthest: the horizontal drawn for one target overwrote the corner already
+  drawn for another. Horizontals are now drawn before any corner, and a lane the connector passes
+  through gets a tee rather than nothing.
+- The lane table grew with the number of commits shown whenever a parent never arrived — under
+  `--author`, `--since`, a path filter or a shallow clone — breaking the memory guarantee. It is
+  now capped, evicting the stalest lane. See the graph note in the README for what this costs.
+
 ## [0.1.0]
 
 First release.

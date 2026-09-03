@@ -38,16 +38,28 @@ impl std::fmt::Display for Unknown {
 /// parses the rest, so `--color` works in any position.
 pub fn take_color(args: &mut Vec<String>) -> Option<bool> {
     let mut force = None;
-    args.retain(|a| match a.as_str() {
-        "--color" => {
-            force = Some(true);
-            false
+    let mut operands = false;
+    args.retain(|a| {
+        // Everything after "--" is a path or revision the user chose. Stripping
+        // a flag out of there would both change colour and lose the operand.
+        if operands {
+            return true;
         }
-        "--no-color" => {
-            force = Some(false);
-            false
+        if a == "--" {
+            operands = true;
+            return true;
         }
-        _ => true,
+        match a.as_str() {
+            "--color" => {
+                force = Some(true);
+                false
+            }
+            "--no-color" => {
+                force = Some(false);
+                false
+            }
+            _ => true,
+        }
     });
     force
 }
@@ -56,16 +68,35 @@ pub fn take_color(args: &mut Vec<String>) -> Option<bool> {
 /// `take_color`, so `--no-pager` works in any position.
 pub fn take_pager(args: &mut Vec<String>) -> gitlimes::pager::Mode {
     let mut mode = gitlimes::pager::Mode::Auto;
-    args.retain(|a| match a.as_str() {
-        "--pager" => {
-            mode = gitlimes::pager::Mode::Always;
-            false
+    let mut operands = false;
+    args.retain(|a| {
+        if operands {
+            return true;
         }
-        "--no-pager" => {
-            mode = gitlimes::pager::Mode::Never;
-            false
+        if a == "--" {
+            operands = true;
+            return true;
         }
-        _ => true,
+        match a.as_str() {
+            "--pager" => {
+                mode = gitlimes::pager::Mode::Always;
+                false
+            }
+            "--no-pager" => {
+                mode = gitlimes::pager::Mode::Never;
+                false
+            }
+            _ => true,
+        }
     });
     mode
+}
+
+/// Rejects `--flag=value` on a flag that takes no value, so `--json=false`
+/// cannot silently turn JSON on.
+pub fn no_value(key: &str, inline: &Option<String>) -> Result<(), String> {
+    match inline {
+        Some(_) => Err(format!("{} does not take a value", key)),
+        None => Ok(()),
+    }
 }

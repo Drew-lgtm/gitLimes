@@ -91,9 +91,18 @@ fn parse(args: Vec<String>) -> Result<Option<Opts>, String> {
                         .map_err(|_| format!("--limit expects a number, got '{}'", v))?,
                 );
             }
-            "--lines" => o.lines = true,
-            "--all" => o.all = true,
-            "--json" => o.json = true,
+            "--lines" => {
+                cli::no_value(&key, &inline)?;
+                o.lines = true
+            }
+            "--all" => {
+                cli::no_value(&key, &inline)?;
+                o.all = true
+            }
+            "--json" => {
+                cli::no_value(&key, &inline)?;
+                o.json = true
+            }
             s if s.starts_with('-') => return Err(cli::Unknown(s.to_string()).to_string()),
             s => o.paths.push(s.to_string()),
         }
@@ -223,7 +232,14 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         .max()
         .unwrap_or(12)
         .clamp(12, 28);
-    let count_w = list[0].commits.to_string().len().max(7);
+    // --limit 0 leaves this empty, and the guard above ran before truncation.
+    // Folded like every other width so there is nothing left to index into.
+    let count_w = list
+        .iter()
+        .map(|a| a.commits.to_string().len())
+        .max()
+        .unwrap_or(0)
+        .max(7);
     // One person often commits under several identities; the email is what
     // actually distinguishes them, so it gets its own column.
     let mail_w = list

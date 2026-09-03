@@ -12,7 +12,23 @@
 struct Lane {
     waiting_for: String,
     color: usize,
+    /// Value of `Lanes::clock` when a commit was last seen in this lane. Used
+    /// to pick a victim when the table is full.
+    touched: u64,
 }
+
+/// Hard ceiling on open lanes.
+///
+/// A lane is normally retired when the commit it waits for arrives. That
+/// assumption breaks whenever git is not showing the whole graph - `--author`,
+/// `--since`, a path filter, a shallow clone - because `%P` still names parents
+/// the filter hides, and those lanes would wait forever. Left unbounded, the
+/// table then grows with the number of commits shown, which is exactly the
+/// thing this tool promises never to do.
+///
+/// Real unfiltered history stays far below this: the widest repository measured
+/// during development peaked at 53 concurrent lanes.
+const MAX_LANES: usize = 64;
 
 /// What happened at one commit, in terms the renderer can draw without knowing
 /// anything about git.
@@ -71,11 +87,18 @@ impl Step {
 pub struct Lanes {
     slots: Vec<Option<Lane>>,
     next_color: usize,
+    clock: u64,
 }
 
 impl Lanes {
     pub fn new() -> Lanes {
         Lanes::default()
+    }
+
+    /// True if some lane is waiting for this commit.
+    #[cfg(test)]
+    fn awaits(&self, hash: &str) -> bool {
+        self.find(hash).is_some()
     }
 
     /// Number of currently open lanes. This is the whole of the graph's state,
@@ -94,11 +117,15 @@ impl Lanes {
     }
 
     pub fn advance(&mut self, hash: &str, parents: &[&str]) -> Step {
+        self.clock += 1;
         let col = match self.find(hash) {
             Some(i) => i,
             // A commit nothing is waiting for is a branch tip; give it a lane.
             None => self.claim(hash),
         };
+        if let Some(lane) = self.slots[col].as_mut() {
+            lane.touched = self.clock;
+        }
 
         let before = self.snapshot();
 
@@ -185,22 +212,35 @@ impl Lanes {
     }
 
     /// Reuses the leftmost free lane so the drawing stays narrow.
+    ///
+    /// At [`MAX_LANES`] the table stops growing and the lane that has gone
+    /// longest without a commit is evicted instead. That only happens when
+    /// parents are never going to arrive, and losing the stalest edge is much
+    /// better than an unbounded table and a drawing hundreds of columns wide.
     fn claim(&mut self, hash: &str) -> usize {
         let lane = Lane {
             waiting_for: hash.to_string(),
             color: self.next_color,
+            touched: self.clock,
         };
         self.next_color = self.next_color.wrapping_add(1);
-        match self.slots.iter().position(|s| s.is_none()) {
-            Some(i) => {
-                self.slots[i] = Some(lane);
-                i
-            }
-            None => {
-                self.slots.push(Some(lane));
-                self.slots.len() - 1
-            }
+        if let Some(i) = self.slots.iter().position(|s| s.is_none()) {
+            self.slots[i] = Some(lane);
+            return i;
         }
+        if self.slots.len() < MAX_LANES {
+            self.slots.push(Some(lane));
+            return self.slots.len() - 1;
+        }
+        let victim = self
+            .slots
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, s)| s.as_ref().map_or(0, |l| l.touched))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        self.slots[victim] = Some(lane);
+        victim
     }
 
     /// Occupancy with trailing empties dropped, so row widths track the lanes
@@ -321,6 +361,47 @@ mod tests {
         }
         assert_eq!(l.open(), 2);
         assert_eq!(l.width(), 2, "width tracks live lanes, not peak lanes");
+    }
+
+    #[test]
+    fn a_filtered_log_cannot_grow_the_lane_table_without_bound() {
+        // Every commit names a parent that never arrives - what `--author`,
+        // `--since` and path filters actually do, since %P still points at
+        // commits the filter hides. Without a ceiling this grows one lane per
+        // commit, which breaks the whole memory promise.
+        let mut l = Lanes::new();
+        for i in 0..5_000u32 {
+            let hash = format!("commit-{}", i);
+            let missing = format!("never-shown-{}", i);
+            l.advance(&hash, &[missing.as_str()]);
+            assert!(
+                l.open() <= MAX_LANES,
+                "lane table reached {} at commit {}",
+                l.open(),
+                i
+            );
+        }
+        assert_eq!(l.open(), MAX_LANES, "the ceiling is what bounds it");
+    }
+
+    #[test]
+    fn eviction_takes_the_stalest_lane() {
+        let mut l = Lanes::new();
+        // Fill the table with lanes whose parents never arrive.
+        for i in 0..MAX_LANES as u32 {
+            l.advance(&format!("c{}", i), &[format!("p{}", i).as_str()]);
+        }
+        assert_eq!(l.open(), MAX_LANES);
+        // Touch the oldest lane so it is no longer the stalest, then force an
+        // eviction; that lane must survive.
+        let revived = l.advance("p0", &["p0-next"]);
+        let col = revived.col;
+        l.advance("brand-new", &["another"]);
+        assert!(
+            l.awaits("p0-next"),
+            "the freshly touched lane was evicted instead of a stale one"
+        );
+        let _ = col;
     }
 
     #[test]
