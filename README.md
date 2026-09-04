@@ -55,6 +55,12 @@ gitlimes graph     unicode branch graph
 Every command takes `--help` and `--json`. `--color` / `--no-color` and `--pager` / `--no-pager`
 override tty detection; `NO_COLOR`, `GITLIMES_PAGER` and `PAGER` are honoured.
 
+`NO_COLOR` disables colour when set to a **non-empty** value, so `NO_COLOR=` cancels an inherited
+setting rather than silently stripping colour. A pager setting may be a bare command with
+arguments (`less -S`), a path containing spaces (`C:\Program Files\Git\usr\bin\less.exe`), or both
+if the path is quoted. The pager only starts once there is something to write, so a command that
+fails never opens one over the top of git's error message.
+
 ### log
 
 ```
@@ -204,13 +210,13 @@ Windows `conhost`; Windows Terminal, macOS and Linux need nothing.
 cargo test
 ```
 
-97 tests in two layers.
+111 tests in two layers.
 
-**46 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
+**56 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
 merges, fork folding, lane reuse and compaction; rendering tests that pin the exact glyph output
 for each case; JSON escaping; pager resolution; and column fitting, relative dates and sparklines.
 
-**51 integration tests** run the real built binary against a real git repository. That is the only
+**54 integration tests** run the real built binary against a real git repository. That is the only
 way to cover the streaming record reader in `repo.rs` and the hand-rolled argument parsing, so
 they carry the claims that matter: that commit order matches git's, that a subject containing a
 pipe, quotes, a backslash and non-ASCII text survives the field-separated record format, that a

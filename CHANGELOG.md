@@ -31,6 +31,18 @@ Findings from an adversarial audit, each reproduced before fixing and pinned by 
 - The lane table grew with the number of commits shown whenever a parent never arrived — under
   `--author`, `--since`, a path filter or a shallow clone — breaking the memory guarantee. It is
   now capped, evicting the stalest lane. See the graph note in the README for what this costs.
+- A pager whose path contained a space was split into a program plus arguments, failed to spawn,
+  and paging silently turned itself off with no message — and on Windows that describes most
+  pager paths. The setting is now read as: a quoted program first, else the longest run of leading
+  words that names a real file, else the first word. So
+  `C:\Program Files\Git\usr\bin\less.exe -S` works quoted or bare, and `less -S` is unchanged.
+- The pager was spawned before the first record was read, so a command that failed early opened
+  an empty pager over the top of git's error message. It now starts lazily, on the first byte
+  actually written.
+- `NO_COLOR=` — present but empty — disabled colour. The convention at no-color.org requires a
+  non-empty value, so an empty one now behaves like unset, which is how a user cancels an
+  inherited setting.
+- A pager child whose stdin could not be taken was dropped without being reaped.
 
 ## [0.1.0]
 
