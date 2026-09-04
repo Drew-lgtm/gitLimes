@@ -210,13 +210,13 @@ Windows `conhost`; Windows Terminal, macOS and Linux need nothing.
 cargo test
 ```
 
-111 tests in two layers.
+117 tests in two layers.
 
-**56 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
+**62 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
 merges, fork folding, lane reuse and compaction; rendering tests that pin the exact glyph output
 for each case; JSON escaping; pager resolution; and column fitting, relative dates and sparklines.
 
-**54 integration tests** run the real built binary against a real git repository. That is the only
+**55 integration tests** run the real built binary against a real git repository. That is the only
 way to cover the streaming record reader in `repo.rs` and the hand-rolled argument parsing, so
 they carry the claims that matter: that commit order matches git's, that a subject containing a
 pipe, quotes, a backslash and non-ASCII text survives the field-separated record format, that a

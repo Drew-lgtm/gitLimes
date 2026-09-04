@@ -43,6 +43,20 @@ Findings from an adversarial audit, each reproduced before fixing and pinned by 
   non-empty value, so an empty one now behaves like unset, which is how a user cancels an
   inherited setting.
 - A pager child whose stdin could not be taken was dropped without being reaped.
+- A commit subject containing `0x1f` or `0x1e` was silently truncated at that byte, because the
+  record format was delimited by exactly those bytes — and git stores them quite happily if you
+  commit with `-F`. Fields are now separated by NUL, which git rejects outright ("a NUL byte in
+  commit log message not allowed"), and the log format is framed by newlines, which no field in
+  it can contain. The subject is also parsed with `splitn`, so it keeps everything after the last
+  field boundary whatever it contains.
+- `Records::finish` could hang a library caller that stopped reading before the end: git stayed
+  blocked writing into a full pipe while we waited on it. The read end is now closed first, and
+  git's exit status is only reported when the stream was actually read to EOF — otherwise the
+  failure being reported is the one we caused.
+- A `Records` dropped without `finish` left the git child unreaped.
+- `Obj::default()` produced malformed JSON — no opening brace and a leading comma — because
+  `Default` was derived rather than delegating to `Obj::new()`.
+- `GetStdHandle` failure was tested for null, but it reports failure as `INVALID_HANDLE_VALUE`.
 
 ## [0.1.0]
 

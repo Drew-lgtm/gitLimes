@@ -1101,3 +1101,45 @@ fn a_failing_command_does_not_open_a_pager() {
         "git's own message must survive"
     );
 }
+
+#[test]
+fn control_bytes_in_a_subject_survive_intact() {
+    // git will store 0x1f and 0x1e in a commit subject if you ask it to, and
+    // the record format used to be delimited by exactly those bytes - so a
+    // subject containing one was silently truncated at it. NUL is used now,
+    // which git rejects outright ("a NUL byte in commit log message not
+    // allowed"), and the log is framed by newlines, which no field can carry.
+    let f = Fixture::new("control-bytes");
+    let unit = format!("before{}after unit-sep", '\u{1f}');
+    let record = format!("before{}after record-sep", '\u{1e}');
+    f.git(&["commit", "-q", "--allow-empty", "-m", &unit]);
+    f.git(&["commit", "-q", "--allow-empty", "-m", &record]);
+
+    let out = f.ok(&["log", "-n", "2", "--no-color", "--no-pager"]);
+    assert!(
+        out.contains(&record),
+        "a subject containing 0x1e was mangled:\n{}",
+        out
+    );
+    assert!(
+        out.contains(&unit),
+        "a subject containing 0x1f was mangled:\n{}",
+        out
+    );
+    assert_eq!(out.lines().count(), 2, "the records must not split");
+
+    // The JSON path must escape them rather than emit raw control bytes.
+    let json = f.ok(&["log", "-n", "2", "--json"]);
+    assert_eq!(json.lines().count(), 2);
+    for line in json.lines() {
+        assert!(
+            !line.chars().any(|c| (c as u32) < 0x20),
+            "a raw control byte reached the JSON output: {}",
+            line
+        );
+    }
+    assert!(
+        json.contains("\\u001f") && json.contains("\\u001e"),
+        "the control bytes should appear as unicode escapes"
+    );
+}

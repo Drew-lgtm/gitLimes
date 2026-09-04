@@ -23,13 +23,13 @@ OPTIONS:
 /// Ref count is bounded by the repository's branch list, so this command
 /// collects rather than streams - that is what lets the name column be sized to
 /// the actual content instead of a guess.
-const FIELDS: &str = "%(HEAD)%1f%(refname:short)%1f%(committerdate:unix)%1f%(authorname)%1f%(upstream:track)%1f%(subject)";
+const FIELDS: &str = "%(HEAD)%00%(refname:short)%00%(committerdate:unix)%00%(authorname)%00%(upstream:track)%00%(subject)";
 
 /// With `--vs`, ahead/behind is requested as a seventh field so the whole
 /// listing still costs exactly one git process.
 fn format_arg(vs: Option<&str>) -> String {
     match vs {
-        Some(base) => format!("--format={}%1f%(ahead-behind:{})", FIELDS, base),
+        Some(base) => format!("--format={}%00%(ahead-behind:{})", FIELDS, base),
         None => format!("--format={}", FIELDS),
     }
 }

@@ -49,10 +49,18 @@ pub fn quote(out: &mut String, s: &str) {
 }
 
 /// Builds one JSON object, tracking commas so a missing one cannot slip through.
-#[derive(Default)]
 pub struct Obj {
     buf: String,
     empty: bool,
+}
+
+impl Default for Obj {
+    fn default() -> Obj {
+        // Not derived: a derived Default would leave the buffer empty and
+        // `empty` false, so the first key would emit a leading comma and no
+        // opening brace - malformed JSON from a perfectly ordinary call.
+        Obj::new()
+    }
 }
 
 impl Obj {
@@ -215,6 +223,16 @@ mod tests {
         let mut o = Obj::new();
         o.strs("refs", std::iter::empty());
         assert_eq!(o.finish(), r#"{"refs":[]}"#);
+    }
+
+    #[test]
+    fn default_produces_the_same_valid_object_as_new() {
+        // A derived Default would open no brace and lead with a comma, so an
+        // ordinary `Obj::default()` would emit malformed JSON.
+        let mut o = Obj::default();
+        o.num("a", 1);
+        assert_eq!(o.finish(), r#"{"a":1}"#);
+        assert_eq!(Obj::default().finish(), "{}");
     }
 
     #[test]
