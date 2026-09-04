@@ -24,14 +24,33 @@ pub const LANES: [&str; 6] = [CYAN, MAGENTA, GREEN, YELLOW, BLUE, RED];
 /// `force` is `Some` when the user passed `--color`/`--no-color`; otherwise we
 /// honour NO_COLOR and fall back to tty detection.
 pub fn init(force: Option<bool>) {
-    let on = match force {
-        Some(v) => v,
-        None => std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal(),
-    };
+    let on = decide(
+        force,
+        std::env::var_os("NO_COLOR").as_deref(),
+        std::io::stdout().is_terminal(),
+    );
     if on {
         enable_vt();
     }
     COLOR.store(on, Ordering::Relaxed);
+}
+
+/// Whether colour should be on, given the three inputs that decide it.
+///
+/// Split out from [`init`] so the rules can be tested; reading the environment
+/// and the terminal makes the decision itself untestable, and it is exactly the
+/// kind of small logic that goes quietly wrong.
+///
+/// An explicit `--color` or `--no-color` wins outright. Otherwise `NO_COLOR`
+/// disables colour **only when it is set to a non-empty value**: the convention
+/// at no-color.org is explicit that an empty value does not count, so that
+/// `NO_COLOR=` can neutralise the setting the way an unset variable does.
+pub fn decide(force: Option<bool>, no_color: Option<&std::ffi::OsStr>, is_tty: bool) -> bool {
+    if let Some(v) = force {
+        return v;
+    }
+    let suppressed = no_color.is_some_and(|v| !v.is_empty());
+    !suppressed && is_tty
 }
 
 pub fn on() -> bool {
@@ -75,3 +94,42 @@ fn enable_vt() {
 
 #[cfg(not(windows))]
 fn enable_vt() {}
+
+#[cfg(test)]
+mod tests {
+    use super::decide;
+    use std::ffi::OsStr;
+
+    fn no_color(v: &str) -> Option<&OsStr> {
+        Some(OsStr::new(v))
+    }
+
+    #[test]
+    fn an_explicit_flag_beats_everything() {
+        assert!(decide(Some(true), no_color("1"), false));
+        assert!(!decide(Some(false), None, true));
+    }
+
+    #[test]
+    fn colour_is_on_only_for_a_terminal() {
+        assert!(decide(None, None, true));
+        assert!(!decide(None, None, false), "piped output must be plain");
+    }
+
+    #[test]
+    fn no_color_suppresses_colour_when_it_has_a_value() {
+        assert!(!decide(None, no_color("1"), true));
+        assert!(!decide(None, no_color("anything"), true));
+    }
+
+    #[test]
+    fn an_empty_no_color_does_not_count() {
+        // no-color.org is explicit that the variable must be present AND
+        // non-empty, so `NO_COLOR=` neutralises an inherited setting rather
+        // than silently stripping colour.
+        assert!(
+            decide(None, no_color(""), true),
+            "NO_COLOR= should behave like unset"
+        );
+    }
+}

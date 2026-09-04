@@ -1013,3 +1013,91 @@ fn only_the_checked_out_commit_is_marked_head() {
         marked[0]
     );
 }
+
+// ------------------------------------------------------- pager resolution
+
+/// Copies the gitlimes binary itself into `dir` and returns the new path.
+///
+/// Using the binary under test as the pager keeps this portable: it is a real
+/// executable on every platform, and `--version` gives it output of its own
+/// that cannot be confused with a log line.
+fn pager_stub(dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).expect("create pager dir");
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    let dest = dir.join(format!("stubpager{}", ext));
+    std::fs::copy(env!("CARGO_BIN_EXE_gitlimes"), &dest).expect("copy pager stub");
+    dest
+}
+
+#[test]
+fn a_pager_path_containing_spaces_still_runs() {
+    // Splitting the setting on whitespace turned `C:\Program Files\...` into a
+    // program plus arguments, which failed to spawn, which silently disabled
+    // paging. On Windows most pager paths look like that.
+    let f = repo();
+    let spaced = f.path().join("pager dir with spaces");
+    let stub = pager_stub(&spaced);
+    assert!(
+        stub.to_string_lossy().contains(' '),
+        "the fixture path must contain a space"
+    );
+
+    let out = f.run_env(
+        &[("GITLIMES_PAGER", &format!("{} --version", stub.display()))],
+        &["log", "-n", "2", "--pager", "--no-color"],
+    );
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("gitlimes "),
+        "the pager never ran; output fell back to the log:\n{}",
+        text
+    );
+}
+
+#[test]
+fn a_quoted_pager_path_may_still_take_arguments() {
+    let f = repo();
+    let spaced = f.path().join("another spaced dir");
+    let stub = pager_stub(&spaced);
+
+    let out = f.run_env(
+        &[(
+            "GITLIMES_PAGER",
+            &format!("\"{}\" --version", stub.display()),
+        )],
+        &["log", "-n", "2", "--pager", "--no-color"],
+    );
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("gitlimes "),
+        "quoting a spaced path should keep the arguments working"
+    );
+}
+
+#[test]
+fn a_failing_command_does_not_open_a_pager() {
+    // The pager used to be spawned before the first record was read, so a
+    // command that was going to fail still opened one - over the top of git's
+    // error message.
+    let f = non_repo();
+    let stub = pager_stub(&f.path().join("stub"));
+
+    let out = f.run_env(
+        &[("GITLIMES_PAGER", &format!("{} --version", stub.display()))],
+        &["log", "--pager", "--no-color"],
+    );
+    assert!(!out.status.success(), "the command itself must still fail");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains("gitlimes "),
+        "a pager was spawned for a command that produced nothing:\n{}",
+        text
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .to_lowercase()
+            .contains("not a git repository"),
+        "git's own message must survive"
+    );
+}
