@@ -8,18 +8,34 @@ use std::borrow::Cow;
 use std::io::{self, BufRead, BufReader};
 use std::process::{Child, ChildStdout, Command, Stdio};
 
-/// Unit separator: between fields. Cannot occur in commit metadata.
-pub const FS: char = '\u{1f}';
-/// Record separator: between commits. Cannot occur in commit metadata.
+/// Field separator.
+///
+/// NUL, because git refuses outright to store one: "a NUL byte in commit log
+/// message not allowed". The obvious-looking choices are not safe - git will
+/// happily store 0x1f or 0x1e in a subject if you commit one with `-F`, and
+/// they then split the record and silently truncate the subject.
+pub const FS: char = '\0';
+
+/// Record separator for formats that append their own lines, such as
+/// `--numstat`, where a newline cannot delimit records.
 pub const RS: u8 = 0x1e;
 
-/// Field order must match `Commit::parse`.
-pub const LOG_FORMAT: &str = "--format=%H%x1f%h%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e";
+/// Record separator for the log format: git already writes a newline after each
+/// record, and no field in `LOG_FORMAT` can contain one. `%s` is collapsed to a
+/// single line by git, and git forbids newlines in author idents and ref names.
+pub const LINE: u8 = b'\n';
+
+/// Field order must match `Commit::parse`. Framed by [`LINE`], separated by
+/// [`FS`], so no byte a commit can carry will break it.
+pub const LOG_FORMAT: &str = "--format=%H%x00%h%x00%P%x00%an%x00%at%x00%D%x00%s";
 
 /// Leading separator, used when git appends extra lines after each record
 /// (`--numstat`). Those lines then arrive at the head of the *next* record,
 /// where one split on the first newline separates them cleanly.
-pub const WHO_FORMAT: &str = "--format=%x1e%an%x1f%ae%x1f%at";
+pub const WHO_FORMAT: &str = "--format=%x1e%an%x00%ae%x00%at";
+
+/// Number of fields in [`LOG_FORMAT`].
+const LOG_FIELDS: usize = 7;
 
 /// Borrows every field out of the reader's buffer; nothing here is owned.
 pub struct Commit<'a> {
@@ -34,7 +50,10 @@ pub struct Commit<'a> {
 
 impl<'a> Commit<'a> {
     pub fn parse(rec: &'a str) -> Option<Commit<'a>> {
-        let mut f = rec.split(FS);
+        // splitn, not split: the subject is last, so anything separator-shaped
+        // inside it stays part of the subject instead of spilling into a field
+        // that no longer exists.
+        let mut f = rec.splitn(LOG_FIELDS, FS);
         Some(Commit {
             hash: f.next()?,
             short: f.next()?,
@@ -124,12 +143,23 @@ pub fn probe(args: &[&str]) -> io::Result<Option<String>> {
 /// Streams separator-delimited records from a child git process.
 pub struct Records {
     child: Child,
-    out: BufReader<ChildStdout>,
+    /// Taken before waiting, to close our end of the pipe. See `finish`.
+    out: Option<BufReader<ChildStdout>>,
     buf: Vec<u8>,
+    sep: u8,
+    /// Set once the stream has been read to EOF. Until then git's exit status
+    /// says nothing useful, because we are the ones who ended it.
+    drained: bool,
 }
 
 impl Records {
-    pub fn spawn(mut cmd: Command) -> io::Result<Records> {
+    /// Reads records framed by [`RS`], for formats that carry extra lines.
+    pub fn spawn(cmd: Command) -> io::Result<Records> {
+        Records::spawn_framed(cmd, RS)
+    }
+
+    /// Reads records framed by `sep`. Use [`LINE`] with [`LOG_FORMAT`].
+    pub fn spawn_framed(mut cmd: Command, sep: u8) -> io::Result<Records> {
         let mut child = cmd.spawn().map_err(spawn_error)?;
         // Only `None` if the caller built a Command without a piped stdout.
         // A library returns an error for that; it does not panic on its caller.
@@ -142,8 +172,10 @@ impl Records {
         let out = BufReader::with_capacity(64 * 1024, stdout);
         Ok(Records {
             child,
-            out,
+            out: Some(out),
             buf: Vec::with_capacity(1024),
+            sep,
+            drained: false,
         })
     }
 
@@ -157,13 +189,17 @@ impl Records {
     /// format that leads with the separator emits an empty first record, and
     /// git pads records with newlines.
     pub fn next_record(&mut self) -> io::Result<Option<Cow<'_, str>>> {
+        let Some(out) = self.out.as_mut() else {
+            return Ok(None);
+        };
         let start;
         loop {
             self.buf.clear();
-            if self.out.read_until(RS, &mut self.buf)? == 0 {
+            if out.read_until(self.sep, &mut self.buf)? == 0 {
+                self.drained = true;
                 return Ok(None);
             }
-            if self.buf.last() == Some(&RS) {
+            if self.buf.last() == Some(&self.sep) {
                 self.buf.pop();
             }
             let s = self
@@ -185,11 +221,28 @@ impl Records {
     /// `not a git repository` and friends surface correctly. git has already
     /// printed its own message to our stderr.
     pub fn finish(mut self) -> io::Result<()> {
+        // Close our end of the pipe before waiting. A caller that stopped
+        // reading early leaves git blocked writing into a full pipe, and
+        // waiting on it in that state deadlocks; dropping the reader gives git
+        // EPIPE so it can exit.
+        drop(self.out.take());
         let status = self.child.wait()?;
-        if !status.success() {
+        // Only report git's status if we actually read to the end. A caller
+        // that stopped early killed git with EPIPE by closing the pipe, and
+        // reporting that back as a failure would blame git for our choice.
+        if self.drained && !status.success() {
             return Err(io::Error::other(GitExit(status.code().unwrap_or(1))));
         }
         Ok(())
+    }
+}
+
+impl Drop for Records {
+    /// A `Records` dropped without `finish` still has a child to reap; without
+    /// this it would be left behind as a zombie.
+    fn drop(&mut self) {
+        drop(self.out.take());
+        let _ = self.child.wait();
     }
 }
 
@@ -233,6 +286,58 @@ mod tests {
         assert_eq!(git_exit_code(&e), Some(128));
         // An unrelated error must not be mistaken for a git exit.
         assert_eq!(git_exit_code(&io::Error::other("something else")), None);
+    }
+
+    #[test]
+    fn the_field_separator_is_one_git_cannot_store() {
+        // git rejects a NUL in a commit message outright, which is what makes
+        // it safe. 0x1f and 0x1e are not safe: git stores them happily, and
+        // they used to split the record and silently truncate the subject.
+        assert_eq!(FS, '\0');
+        assert!(LOG_FORMAT.contains("%x00"));
+        assert!(
+            !LOG_FORMAT.contains("%x1f") && !LOG_FORMAT.contains("%x1e"),
+            "the log format must not rely on a byte a commit can carry"
+        );
+    }
+
+    #[test]
+    fn a_subject_containing_a_separator_stays_whole() {
+        // splitn, not split: everything after the last field boundary belongs
+        // to the subject, whatever bytes it happens to contain.
+        let rec = "HASH\u{0}SHORT\u{0}P1 P2\u{0}Alice\u{0}123\u{0}refs\u{0}subject with \u{1f} and \u{1e}";
+        let c = Commit::parse(rec).expect("parses");
+        assert_eq!(c.hash, "HASH");
+        assert_eq!(c.author, "Alice");
+        assert_eq!(c.subject, "subject with \u{1f} and \u{1e}");
+    }
+
+    #[test]
+    fn a_truncated_record_is_rejected_rather_than_half_parsed() {
+        assert!(Commit::parse("HASH\u{0}SHORT\u{0}P1").is_none());
+        assert!(Commit::parse("").is_none());
+    }
+
+    #[test]
+    fn abandoning_a_reader_partway_neither_hangs_nor_leaks() {
+        // A library caller may stop reading early. finish() must close the pipe
+        // before waiting, or git stays blocked writing into a full one and the
+        // wait never returns.
+        let mut rec =
+            Records::spawn_framed(git(&["log", LOG_FORMAT, "--"]), LINE).expect("spawn git log");
+        assert!(
+            rec.next_record().expect("read").is_some(),
+            "this repository has commits"
+        );
+        // Deliberately stop here, with git still producing output.
+        rec.finish().expect("finish must not hang or error");
+    }
+
+    #[test]
+    fn dropping_a_reader_without_finishing_still_reaps_git() {
+        let rec =
+            Records::spawn_framed(git(&["log", LOG_FORMAT, "--"]), LINE).expect("spawn git log");
+        drop(rec);
     }
 
     #[test]

@@ -116,7 +116,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     argv.extend(o.paths.iter().cloned());
 
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let mut rec = Records::spawn(repo::git(&refs))?;
+    let mut rec = Records::spawn_framed(repo::git(&refs), repo::LINE)?;
 
     let mut w = pager::out();
 

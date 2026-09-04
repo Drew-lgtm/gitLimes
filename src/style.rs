@@ -82,7 +82,11 @@ fn enable_vt() {
 
     unsafe {
         let h = GetStdHandle(STD_OUTPUT_HANDLE);
-        if h.is_null() {
+        // GetStdHandle reports failure as INVALID_HANDLE_VALUE (-1), and
+        // returns null only when the process has no such handle at all. Both
+        // must be rejected; checking null alone would pass -1 straight into
+        // GetConsoleMode.
+        if h.is_null() || h as isize == -1 {
             return;
         }
         let mut mode = 0u32;
