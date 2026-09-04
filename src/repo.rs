@@ -158,6 +158,16 @@ impl Records {
         Records::spawn_framed(cmd, RS)
     }
 
+    /// Reads [`LOG_FORMAT`] output: one commit per line, fields separated by
+    /// [`FS`].
+    ///
+    /// The pairing of format and framing has to match, and getting it wrong is
+    /// silent - `spawn` on this format would read the entire history as one
+    /// record - so it is a single call rather than two things to line up.
+    pub fn spawn_log(cmd: Command) -> io::Result<Records> {
+        Records::spawn_framed(cmd, LINE)
+    }
+
     /// Reads records framed by `sep`. Use [`LINE`] with [`LOG_FORMAT`].
     pub fn spawn_framed(mut cmd: Command, sep: u8) -> io::Result<Records> {
         let mut child = cmd.spawn().map_err(spawn_error)?;

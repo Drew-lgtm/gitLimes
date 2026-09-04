@@ -35,7 +35,7 @@
 //! ```no_run
 //! use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
 //!
-//! let mut records = Records::spawn(repo::git(&["log", LOG_FORMAT, "--"]))?;
+//! let mut records = Records::spawn_log(repo::git(&["log", LOG_FORMAT, "--"]))?;
 //! while let Some(record) = records.next_record()? {
 //!     if let Some(commit) = Commit::parse(&record) {
 //!         println!("{} {}", commit.short, commit.subject);
