@@ -177,6 +177,15 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         }
     }
     w.finish()?;
+
+    // Say so rather than let an approximation pass for the real thing. Goes to
+    // stderr so it never contaminates `--json` or a piped drawing.
+    if lanes.evicted() {
+        eprintln!(
+            "gitlimes: more than {} branches were open at once; some edges are not drawn",
+            gitlimes::graph::lanes::MAX_LANES
+        );
+    }
     rec.finish()
 }
 
