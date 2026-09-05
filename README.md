@@ -108,12 +108,20 @@ whole life, even as it changes column. `--ascii` for terminals without box-drawi
 The topology matches `git log --graph` exactly, and is usually more compact — where git needs
 three rows to untangle a crossing merge, the box-drawing form needs one.
 
-One honest limitation: with a **commit filter** (`--author`, `--since`, a path, or a shallow
-clone) the graph is approximate. git still reports each commit's real parents, but the filter
-hides some of them, so lanes are opened for commits that will never arrive. The lane table is
-capped at 64 and evicts the lane that has gone longest without a commit, which keeps memory
-bounded and the drawing readable — but a filtered graph is a sketch, not the exact topology.
-Unfiltered, it is exact.
+One honest limitation. A lane is retired when the commit it waits for arrives, and the table is
+capped at 64 lanes so it cannot grow without bound. Past that cap the stalest lane is dropped,
+and with it an edge — so the drawing stops being exact. Two things reach it:
+
+- A **commit filter** (`--author`, `--since`, a path, or a shallow clone). git still reports each
+  commit's real parents, but the filter hides some of them, so lanes are opened for commits that
+  will never arrive.
+- More than 64 branches genuinely open at once, which an unfiltered `--all` can reach on a
+  repository with many active branches.
+
+When it happens, gitlimes says so on stderr rather than passing a sketch off as the real thing.
+Below that, the topology matches `git log --graph` exactly. A merge with more parents than the
+cap is *not* affected: the table grows to fit one commit's parents, since that is bounded by the
+commit rather than by the length of the history.
 
 ## Machine-readable output
 
@@ -210,13 +218,13 @@ Windows `conhost`; Windows Terminal, macOS and Linux need nothing.
 cargo test
 ```
 
-117 tests in two layers.
+121 tests in two layers.
 
-**62 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
+**64 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
 merges, fork folding, lane reuse and compaction; rendering tests that pin the exact glyph output
 for each case; JSON escaping; pager resolution; and column fitting, relative dates and sparklines.
 
-**55 integration tests** run the real built binary against a real git repository. That is the only
+**56 integration tests** run the real built binary against a real git repository. That is the only
 way to cover the streaming record reader in `repo.rs` and the hand-rolled argument parsing, so
 they carry the claims that matter: that commit order matches git's, that a subject containing a
 pipe, quotes, a backslash and non-ASCII text survives the field-separated record format, that a

@@ -28,7 +28,7 @@ struct Lane {
 ///
 /// Real unfiltered history stays far below this: the widest repository measured
 /// during development peaked at 53 concurrent lanes.
-const MAX_LANES: usize = 64;
+pub const MAX_LANES: usize = 64;
 
 /// What happened at one commit, in terms the renderer can draw without knowing
 /// anything about git.
@@ -88,6 +88,7 @@ pub struct Lanes {
     slots: Vec<Option<Lane>>,
     next_color: usize,
     clock: u64,
+    evicted: bool,
 }
 
 impl Lanes {
@@ -211,12 +212,29 @@ impl Lanes {
             .position(|s| s.as_ref().is_some_and(|l| l.waiting_for == hash))
     }
 
+    /// True once a lane has been evicted, which means the drawing has lost at
+    /// least one edge and is no longer an exact rendering of the history.
+    ///
+    /// The caller is expected to say so rather than present an approximation as
+    /// the real thing.
+    pub fn evicted(&self) -> bool {
+        self.evicted
+    }
+
     /// Reuses the leftmost free lane so the drawing stays narrow.
     ///
     /// At [`MAX_LANES`] the table stops growing and the lane that has gone
-    /// longest without a commit is evicted instead. That only happens when
-    /// parents are never going to arrive, and losing the stalest edge is much
-    /// better than an unbounded table and a drawing hundreds of columns wide.
+    /// longest without a commit is evicted instead, so a filtered log whose
+    /// parents never arrive cannot grow the table without bound.
+    ///
+    /// A lane touched by the commit currently being drawn is never a candidate.
+    /// Every lane claimed during one `advance` shares the same `touched` value,
+    /// so a plain "stalest wins" would pick the first of them - the commit's own
+    /// column - and the merge would lose its own first-parent edge and later
+    /// redraw that parent as an unrelated tip. When nothing else can be evicted,
+    /// the table grows past the ceiling: the excess is bounded by one commit's
+    /// parent count, which is a property of that commit and not of how long the
+    /// history is.
     fn claim(&mut self, hash: &str) -> usize {
         let lane = Lane {
             waiting_for: hash.to_string(),
@@ -236,11 +254,22 @@ impl Lanes {
             .slots
             .iter()
             .enumerate()
+            .filter(|(_, s)| s.as_ref().is_some_and(|l| l.touched < self.clock))
             .min_by_key(|(_, s)| s.as_ref().map_or(0, |l| l.touched))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.slots[victim] = Some(lane);
-        victim
+            .map(|(i, _)| i);
+        match victim {
+            Some(i) => {
+                // An edge is about to be lost; the caller must not present the
+                // result as an exact drawing.
+                self.evicted = true;
+                self.slots[i] = Some(lane);
+                i
+            }
+            None => {
+                self.slots.push(Some(lane));
+                self.slots.len() - 1
+            }
+        }
     }
 
     /// Occupancy with trailing empties dropped, so row widths track the lanes
@@ -382,6 +411,51 @@ mod tests {
             );
         }
         assert_eq!(l.open(), MAX_LANES, "the ceiling is what bounds it");
+    }
+
+    #[test]
+    fn a_merge_wider_than_the_ceiling_keeps_every_parent() {
+        // Every lane claimed during one advance shares the same `touched`, so a
+        // plain "stalest wins" picked the first of them - the commit's own
+        // column. The merge then lost its own first-parent edge, and that
+        // parent was later redrawn as an unrelated tip.
+        let parents: Vec<String> = (0..MAX_LANES + 2).map(|i| format!("p{:03}", i)).collect();
+        let refs: Vec<&str> = parents.iter().map(String::as_str).collect();
+
+        let mut l = Lanes::new();
+        let s = l.advance("octopus", &refs);
+
+        assert_eq!(
+            s.opening.len(),
+            refs.len() - 1,
+            "every parent past the first needs its own lane"
+        );
+        assert!(
+            l.awaits(&parents[0]),
+            "the merge must still be waiting for its own first parent"
+        );
+        assert!(
+            !l.evicted(),
+            "growing for one commit's parents is not an eviction"
+        );
+        // The excess is bounded by this commit's parent count, not by history.
+        assert_eq!(l.open(), refs.len());
+    }
+
+    #[test]
+    fn eviction_is_reported_so_the_drawing_is_not_passed_off_as_exact() {
+        let mut l = Lanes::new();
+        assert!(!l.evicted());
+        // Fill the table with lanes whose parents never arrive, then force one
+        // more claim in a later tick so a stale lane is a valid victim.
+        for i in 0..MAX_LANES as u32 {
+            l.advance(&format!("c{}", i), &[format!("p{}", i).as_str()]);
+        }
+        assert_eq!(l.open(), MAX_LANES);
+        assert!(!l.evicted(), "the table filled without evicting anything");
+
+        l.advance("one-too-many", &["another"]);
+        assert!(l.evicted(), "an edge was dropped and nobody was told");
     }
 
     #[test]

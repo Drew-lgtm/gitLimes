@@ -23,7 +23,12 @@ OPTIONS:
 /// Ref count is bounded by the repository's branch list, so this command
 /// collects rather than streams - that is what lets the name column be sized to
 /// the actual content instead of a guess.
-const FIELDS: &str = "%(HEAD)%00%(refname:short)%00%(committerdate:unix)%00%(authorname)%00%(upstream:track)%00%(subject)";
+/// `%(symref)` leads, and is non-empty only for a symbolic ref such as
+/// `refs/remotes/origin/HEAD`. Matching the *name* instead does not work in
+/// either direction: that ref shortens to `origin`, not `origin/HEAD`, so a
+/// name test never caught it - while `feature/HEAD` is a perfectly legal branch
+/// that such a test throws away.
+const FIELDS: &str = "%(symref)%00%(HEAD)%00%(refname:short)%00%(committerdate:unix)%00%(authorname)%00%(upstream:track)%00%(subject)";
 
 /// With `--vs`, ahead/behind is requested as a seventh field so the whole
 /// listing still costs exactly one git process.
@@ -135,13 +140,29 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
             continue;
         }
         let mut f = line.split(repo::FS);
-        let (Some(head), Some(name), Some(ts), Some(author), Some(upstream), Some(subject)) =
-            (f.next(), f.next(), f.next(), f.next(), f.next(), f.next())
+        let (
+            Some(symref),
+            Some(head),
+            Some(name),
+            Some(ts),
+            Some(author),
+            Some(upstream),
+            Some(subject),
+        ) = (
+            f.next(),
+            f.next(),
+            f.next(),
+            f.next(),
+            f.next(),
+            f.next(),
+            f.next(),
+        )
         else {
             continue;
         };
-        // for-each-ref lists the symbolic HEAD alongside real branches.
-        if name.ends_with("/HEAD") {
+        // for-each-ref lists symbolic refs alongside real branches. This is the
+        // only reliable way to tell them apart; see FIELDS.
+        if !symref.is_empty() {
             continue;
         }
         let track = if inline_track {

@@ -1143,3 +1143,48 @@ fn control_bytes_in_a_subject_survive_intact() {
         "the control bytes should appear as unicode escapes"
     );
 }
+
+#[test]
+fn a_branch_named_head_is_listed_and_the_symbolic_ref_is_not() {
+    // `refs/remotes/origin/HEAD` shortens to `origin`, not `origin/HEAD`, so a
+    // name test never caught the symbolic ref it was written for — while
+    // `topic/HEAD`, a perfectly legal branch, was thrown away by it.
+    let f = Fixture::new("symref");
+    f.git(&["branch", "topic/HEAD"]);
+    f.git(&["update-ref", "refs/remotes/origin/main", "main"]);
+    f.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    ]);
+
+    let out = f.ok(&["branches", "-a", "--no-color", "--no-pager"]);
+    assert!(
+        out.contains("topic/HEAD"),
+        "a real branch named like HEAD was dropped:\n{}",
+        out
+    );
+    assert!(
+        out.contains("origin/main"),
+        "the real remote branch should be listed:\n{}",
+        out
+    );
+
+    // The symbolic ref appears as a bare `origin` column entry; it must not.
+    let names: Vec<&str> = out
+        .lines()
+        .filter_map(|l| l.split_whitespace().next_back().map(|_| l))
+        .map(|l| l.trim_start_matches('*').trim())
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert!(
+        !names.contains(&"origin"),
+        "the symbolic ref leaked in as a branch: {:?}",
+        names
+    );
+
+    // And the same through --json, which is what a script would read.
+    let json = f.ok(&["branches", "-a", "--json"]);
+    assert!(json.contains(r#""name":"topic/HEAD""#), "json: {}", json);
+    assert!(!json.contains(r#""name":"origin""#), "json: {}", json);
+}

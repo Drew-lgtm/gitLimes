@@ -57,6 +57,18 @@ Findings from an adversarial audit, each reproduced before fixing and pinned by 
 - `Obj::default()` produced malformed JSON — no opening brace and a leading comma — because
   `Default` was derived rather than delegating to `Obj::new()`.
 - `GetStdHandle` failure was tested for null, but it reports failure as `INVALID_HANDLE_VALUE`.
+- A merge with more parents than the lane ceiling lost edges, including its own first-parent edge,
+  which then reappeared further down as an unrelated branch tip. Every lane claimed during one
+  commit shares a timestamp, so "evict the stalest" picked the first of them — the commit's own
+  column. Lanes touched by the commit being drawn are no longer candidates, and the table grows
+  to fit one commit's parents, which is bounded by that commit rather than by history length.
+- Lane eviction was silent, and the README claimed an unfiltered graph was always exact. It is
+  not: more than 64 simultaneously open branches reaches the cap without any filter. Eviction now
+  prints a warning to stderr, and the README says what the cap actually costs.
+- `branches` dropped any branch whose last path component was `HEAD`, such as `topic/HEAD`, while
+  failing to drop the symbolic ref it was written for — `refs/remotes/origin/HEAD` shortens to
+  `origin`, not `origin/HEAD`, so the name test never matched it and a phantom `origin` branch was
+  listed instead. Symbolic refs are now identified by `%(symref)`.
 
 ## [0.1.0]
 
