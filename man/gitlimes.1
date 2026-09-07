@@ -1,0 +1,437 @@
+.TH GITLIMES 1 "2026-09-07" "gitlimes 0.1.0" "gitlimes manual"
+.SH NAME
+gitlimes \- fast, low-memory git history CLI
+.SH SYNOPSIS
+.B gitlimes
+.RB [ \-\-color " | " \-\-no\-color ]
+.RB [ \-\-pager " | " \-\-no\-pager ]
+.I command
+.RI [ options ]
+.br
+.B gitlimes
+.RB [ \-h " | " \-\-help ]
+.br
+.B gitlimes
+.RB [ \-V " | " \-\-version ]
+.SH DESCRIPTION
+.B gitlimes
+answers ordinary questions about a git repository \(em what happened, who
+did it, how the branches relate \(em and prints a readable, coloured answer
+in milliseconds.
+It works by spawning
+.BR git (1)
+and streaming its output through a buffer that is reused for every record.
+No command's memory use scales with the length of the repository's history:
+.B log
+is bounded by one commit record at a time,
+.B graph
+by the number of branch lanes simultaneously open,
+.B who
+by the number of distinct authors, and
+.B branches
+by the number of refs.
+A 500,000\-commit repository costs the same as a 50\-commit one.
+.PP
+.B gitlimes
+requires
+.B git
+on
+.IR PATH .
+It has no other runtime dependency.
+.SH COMMANDS
+.TP
+.B log
+Coloured commit history.
+.TP
+.B branches
+Branch overview with age, tracking status and staleness.
+.TP
+.B who
+Author and contribution statistics.
+.TP
+.B graph
+Unicode branch graph.
+.PP
+Every command accepts
+.B \-h ,
+.BR \-\-help ", and " \-\-json .
+.SH GLOBAL OPTIONS
+These may appear before or after the command name, but never after a bare
+.B \-\-
+that introduces revisions or paths \(em an operand spelled
+.B \-\-color
+is then left alone, not consumed as a flag.
+.TP
+.BR \-\-color ", " \-\-no\-color
+Force colour on or off, overriding both terminal detection and
+.BR NO_COLOR .
+.TP
+.BR \-\-pager ", " \-\-no\-pager
+Force paging on or off, overriding terminal detection.
+.TP
+.BR \-h ", " \-\-help
+Show usage for
+.B gitlimes
+itself, or for the command it follows.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH LOG
+.B gitlimes log
+.RI [ rev ]
+.RB [ \-n
+.IR N ]
+.RB [ \-\-author
+.IR pattern ]
+.RB [ \-\-since
+.IR date ]
+.RB [ \-\-until
+.IR date ]
+.RB [ \-\-all ]
+.RB [ \-\-oneline ]
+.RB [ \-\-json ]
+[\fB\-\-\fR \fIpath\fR ...]
+.PP
+Prints commit history: short hash, relative age, author, ref decorations
+(local branches green, remote branches red, tags yellow, the checked\-out
+ref in bold), and subject.
+A revision may be given to start from somewhere other than
+.BR HEAD .
+Everything after a literal
+.B \-\-
+is passed to git as a path filter, so a path that happens to look like a
+flag is never misread as one.
+.TP
+.BI "\-n, \-\-max\-count " N
+Show at most
+.I N
+commits. Passed straight through to git, so memory does not depend on
+.IR N .
+.TP
+.BI "\-\-author " pattern
+Only commits whose author matches
+.IR pattern .
+.TP
+.BI "\-\-since, \-\-until " date
+Only commits in the given date range. Accepts anything
+.B git log
+does, including relative forms like
+.RB \(dq "2 weeks ago" \(dq.
+.TP
+.B \-\-all
+Include commits reachable from any ref, not just
+.BR HEAD .
+.TP
+.B \-\-oneline
+Print only the hash and subject.
+.TP
+.B \-\-json
+See
+.B JSON OUTPUT
+below.
+.SH BRANCHES
+.B gitlimes branches
+.RB [ \-a ]
+.RB [ \-\-stale
+.IR days ]
+.RB [ \-\-vs
+.IR ref ]
+.RB [ \-\-json ]
+.PP
+Lists branches sorted by last commit, with age, author and upstream
+tracking. The checked\-out branch is marked with
+.BR * .
+.TP
+.BR \-a ", " \-\-all
+Also list remote\-tracking branches.
+.TP
+.BI "\-\-stale " days
+Mark branches whose last commit is older than
+.I days
+days.
+.I days
+must be a non\-negative whole number; a value that could put the cutoff in
+the future or overflow the calculation is rejected rather than silently
+misinterpreted.
+.TP
+.BI "\-\-vs " ref
+Show ahead/behind against
+.I ref
+instead of each branch's own upstream.
+On git 2.41 and later this costs a single extra git process no matter how
+many branches are listed, using
+.BR for\-each\-ref (1)'s
+.BR %(ahead\-behind:) ;
+older git falls back to one process per branch.
+.TP
+.B \-\-json
+See
+.B JSON OUTPUT
+below.
+.SH WHO
+.B gitlimes who
+.RI [ path ]
+.RB [ \-\-since
+.IR date ]
+.RB [ \-\-limit
+.IR N ]
+.RB [ \-\-lines ]
+.RB [ \-\-all ]
+.RB [ \-\-json ]
+.PP
+Lists authors by commit count, with their share of the total, when they
+were first and last seen, and an activity sparkline. Authors are grouped
+by email address (case\-insensitively), so one person committing under
+several display names is still counted once; the email column shows which
+address is meant.
+.PP
+The sparkline spans the whole history shown rather than a fixed recent
+window, so a repository that has been quiet for years still shows a
+shape instead of a row of blanks. Its header states what one block is
+worth \(em from a day up to a year or more \(em because the scale adapts
+to the oldest commit found and is never left implicit.
+.TP
+.RI [ path ]
+Restrict to commits touching
+.IR path ,
+to answer "who owns this file or directory".
+.TP
+.BI "\-\-since " date
+Only count commits more recent than
+.IR date .
+.TP
+.BI "\-\-limit " N
+Show only the top
+.I N
+authors by commit count.
+.TP
+.B \-\-lines
+Also total added and removed lines per author. Roughly doubles the work
+git has to do, which is why it is opt\-in.
+.TP
+.B \-\-all
+Include commits reachable from any ref, not just
+.BR HEAD .
+.TP
+.B \-\-json
+See
+.B JSON OUTPUT
+below.
+.SH GRAPH
+.B gitlimes graph
+.RI [ rev ]
+.RB [ \-n
+.IR N ]
+.RB [ \-a ]
+.RB [ \-\-ascii ]
+.RB [ \-\-json ]
+.RB [ \-\-author
+.IR pattern ]
+.RB [ \-\-since
+.IR date ]
+[\fB\-\-\fR \fIpath\fR ...]
+.PP
+Draws the branch graph using Unicode box\-drawing characters. A filled
+dot is an ordinary commit; a hollow dot is a merge. Each branch keeps one
+colour for its entire life, even as it changes column, and lane
+compaction keeps the drawing as narrow as the true concurrency allows.
+Below the eviction limit described under
+.BR "LIMITS" ,
+the topology matches
+.B git log \-\-graph
+exactly, and is usually more compact: a crossing merge that needs three
+rows in git's ASCII form needs one here.
+.TP
+.BI "\-n, \-\-max\-count " N
+Show at most
+.I N
+commits (default 40).
+.TP
+.BR \-a ", " \-\-all
+Include all refs, not just
+.BR HEAD .
+.TP
+.B \-\-ascii
+Draw with plain ASCII
+.RB ( * ", " | ", " / ", " \e )
+instead of box\-drawing characters, for terminals or fonts that lack them.
+.TP
+.BI "\-\-author " pattern
+.TP
+.BI "\-\-since " date
+As in
+.BR log .
+.TP
+.B \-\-json
+See
+.B JSON OUTPUT
+below; each object additionally carries a
+.B graph
+field with that commit's lane geometry
+.RI ( col ", " lanes ", " merge ", " closing ", " opening ", " shifts ),
+so a different renderer \(em an SVG export, a canvas, a TUI \(em can draw
+the same graph without recomputing the layout.
+.SH LIMITS
+A branch lane is normally retired the moment the commit it is waiting for
+is reached. That assumption does not hold when git is not shown the whole
+graph \(em under
+.BR \-\-author ,
+.BR \-\-since ,
+a path filter, or a shallow clone \(em because a commit's parents are
+still the real ones even when the filter hides them, so a lane can be
+left waiting for a commit that will never arrive. To keep memory bounded
+regardless, the number of simultaneously open lanes is capped at 64; past
+that point the lane that has gone longest without a commit is evicted,
+which drops one edge from the drawing. A single merge with more than 64
+parents is not affected by this: the table grows just enough to hold that
+one commit's own parents, since that is bounded by the commit and not by
+the length of the history.
+.PP
+When an edge is dropped this way,
+.B gitlimes
+prints a warning to standard error rather than presenting the drawing as
+exact. In ordinary use \(em an unfiltered graph, or a filtered one on a
+repository with a normal number of active branches \(em the cap is never
+reached.
+.SH JSON OUTPUT
+Every command accepts
+.B \-\-json ,
+which emits newline\-delimited JSON (NDJSON): one self\-contained object
+per line, never a wrapping array. This keeps output streamable \(em safe
+to pipe into
+.BR head (1),
+and never invalid mid\-stream the way a JSON array would be while it is
+still being written. Pipe into
+.B jq \-s
+to collect it into an array.
+.PP
+There is deliberately no version field in the output. Existing keys are
+not renamed, retyped, or removed without a note in the project's
+.B CHANGELOG.md ;
+new keys may appear in any release, so a consumer should ignore keys it
+does not recognise. Some keys are present only when they apply \(em
+.B head
+on a commit,
+.B track
+on a branch,
+.B added
+and
+.B removed
+on an author only with
+.BR \-\-lines .
+.B gitlimes \-\-version
+identifies which release produced a given line.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set to any non\-empty value, disables colour, matching the
+convention at
+.BR no\-color.org .
+An empty value
+.RI ( NO_COLOR= )
+is treated as unset, so it can be used to cancel an inherited setting.
+Overridden by
+.B \-\-color
+and
+.BR \-\-no\-color .
+.TP
+.BR GITLIMES_PAGER ", " PAGER
+Set the pager used when output is paged, checked in that order.
+.B GITLIMES_PAGER
+lets the pager for
+.B gitlimes
+be chosen independently of the pager used elsewhere. An empty value
+disables paging, matching how
+.BR git (1)
+and most other tools treat an empty
+.BR PAGER .
+The value may be a bare command
+.RB ( "less \-S" ),
+a path that contains spaces, quoted or not
+.RB ( "C:\eProgram Files\eGit\eusr\ebin\eless.exe \-S" ),
+or nothing at all, in which case
+.B less
+is used if it can be found. The pager is started only once there is
+output to send it, so a command that fails before producing any never
+opens one over the top of git's own error message.
+.TP
+.B PATH
+.B git
+must be found on
+.BR PATH .
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 2
+The command line could not be parsed: an unknown flag, a flag missing
+its required value, or a value that failed to parse.
+.TP
+.B other
+Any other non\-zero code is
+.BR git 's
+own exit status for the underlying command, propagated unchanged \(em
+.B 128
+for "not a git repository" and similar fatal errors, for instance.
+.B gitlimes
+adds nothing of its own in this case, since git has already explained
+itself on standard error.
+.SH EXAMPLES
+.TP
+.B gitlimes log \-n 20
+The last 20 commits on the current branch.
+.TP
+.B gitlimes log \-\-author=Jane \-\-since="2 weeks ago"
+What Jane has committed in the last two weeks.
+.TP
+.B gitlimes branches \-a \-\-stale 90
+Every branch, local and remote, with anything untouched for 90 days
+flagged.
+.TP
+.B gitlimes branches \-\-vs main
+Every branch's ahead/behind count against
+.BR main ,
+in one git process.
+.TP
+.B gitlimes who \-\-lines src/
+Who has touched
+.B src/
+and how many lines they have added or removed there.
+.TP
+.B gitlimes graph \-\-all \-n 60
+The last 60 commits across every branch, drawn as a graph.
+.TP
+.B gitlimes log \-\-json | jq \-r .subject
+The subject line of every commit, extracted with
+.BR jq (1).
+.TP
+.B GITLIMES_PAGER=\(dqless \-S\(dq gitlimes log
+Page the log through
+.B less
+with long lines truncated instead of wrapped.
+.SH FILES
+.B gitlimes
+reads no configuration file of its own; every setting is a command\-line
+flag or one of the environment variables listed above.
+.SH SEE ALSO
+.BR git (1),
+.BR git\-log (1),
+.BR git\-for\-each\-ref (1),
+.BR jq (1)
+.PP
+The full project documentation, including the JSON schema and the case
+for its design choices, is in
+.B README.md
+in the project repository:
+.br
+.B https://github.com/Drew\-lgtm/gitLimes
+.SH AUTHOR
+Ondrej Martinek.
+.SH LICENSE
+Dual\-licensed under the MIT license and the Apache License, Version 2.0,
+at the user's option. See
+.B LICENSE\-MIT
+and
+.B LICENSE\-APACHE
+in the project repository.

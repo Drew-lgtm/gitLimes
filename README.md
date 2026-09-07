@@ -43,6 +43,23 @@ cargo build --release
 
 The binary lands in `target/release/gitlimes` and needs `git` on `PATH`. Tip: `alias limes=gitlimes`.
 
+## Documentation
+
+- **Man page** — [`man/gitlimes.1`](man/gitlimes.1). Bundled in every release archive. Read it
+  without installing it with `man ./man/gitlimes.1`, or install it for good:
+  ```
+  sudo cp man/gitlimes.1 /usr/local/share/man/man1/
+  sudo mandb    # or: sudo makewhatis, on some systems
+  ```
+- **tldr page** — [`tldr/gitlimes.md`](tldr/gitlimes.md): the handful of commands most people
+  reach for first, in [tldr-pages](https://github.com/tldr-pages/tldr) format. Not yet part of
+  the upstream `tldr-pages/tldr` repository; until it is, view it with `tldr --render
+  tldr/gitlimes.md` (the [`tldr-node-client`](https://github.com/tldr-pages/tldr-node-client)
+  supports `--render` on a local file) or just read it directly.
+- Every command's own `--help` is the fastest reference and always matches the binary you're
+  running, since it's built from the same source. The man page and tldr page are maintained by
+  hand alongside it and cover the same options in more depth.
+
 ## Commands
 
 ```
