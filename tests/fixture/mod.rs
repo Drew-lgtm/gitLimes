@@ -200,6 +200,25 @@ impl Fixture {
         Fixture::check(out, &format!("git {:?}", args))
     }
 
+    /// Runs git with `stdin` piped in as its input - for constructing a raw
+    /// object (`hash-object --stdin`) with exact bytes that env vars or argv
+    /// could not carry faithfully, such as a byte sequence that is not valid
+    /// UTF-8.
+    pub fn git_with_stdin(&self, args: &[&str], stdin: &[u8]) -> String {
+        let path = self.dir.join(".stdin-payload");
+        std::fs::write(&path, stdin).expect("write stdin payload");
+        let out = self
+            .base_command("git")
+            .args(args)
+            .stdin(std::process::Stdio::from(
+                std::fs::File::open(&path).expect("reopen stdin payload"),
+            ))
+            .output()
+            .expect("run git");
+        let _ = std::fs::remove_file(&path);
+        Fixture::check(out, &format!("git {:?} < payload", args))
+    }
+
     fn commit(
         &self,
         seq: u32,

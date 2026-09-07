@@ -10,29 +10,41 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 
 /// Field separator.
 ///
-/// NUL, because git refuses outright to store one: "a NUL byte in commit log
-/// message not allowed". The obvious-looking choices are not safe - git will
-/// happily store 0x1f or 0x1e in a subject if you commit one with `-F`, and
-/// they then split the record and silently truncate the subject.
+/// NUL, because git refuses outright to store one anywhere in a commit
+/// object - not just in the message. `git fast-import`, the most permissive,
+/// purely byte-oriented way to construct a commit, rejects a NUL embedded in
+/// an author line outright ("missing < in ident string"), because its ident
+/// parser is itself NUL-terminated C-string based. The obvious-looking
+/// alternatives are not safe: git happily stores 0x1f or 0x1e in a subject or
+/// an author name if you commit one via `-F` or a raw ident line, and they
+/// then split the record and silently truncate or drop it. See `WHO_FORMAT`
+/// for the one place this project got that wrong before.
 pub const FS: char = '\0';
 
-/// Record separator for formats that append their own lines, such as
-/// `--numstat`, where a newline cannot delimit records.
-pub const RS: u8 = 0x1e;
-
-/// Record separator for the log format: git already writes a newline after each
-/// record, and no field in `LOG_FORMAT` can contain one. `%s` is collapsed to a
-/// single line by git, and git forbids newlines in author idents and ref names.
+/// Record separator for every format string in this crate: each one emits
+/// exactly one physical line per record, and no field any of them use -
+/// `%s`, `%an`, `%ae`, ref names - can contain an embedded newline, since git
+/// collapses `%s` to one line and forbids newlines in author idents and ref
+/// names outright.
 pub const LINE: u8 = b'\n';
 
 /// Field order must match `Commit::parse`. Framed by [`LINE`], separated by
 /// [`FS`], so no byte a commit can carry will break it.
 pub const LOG_FORMAT: &str = "--format=%H%x00%h%x00%P%x00%an%x00%at%x00%D%x00%s";
 
-/// Leading separator, used when git appends extra lines after each record
-/// (`--numstat`). Those lines then arrive at the head of the *next* record,
-/// where one split on the first newline separates them cleanly.
-pub const WHO_FORMAT: &str = "--format=%x1e%an%x00%ae%x00%at";
+/// One line per commit: author name, email and timestamp, separated by
+/// [`FS`]. With `--numstat`, git appends this commit's changed-file lines
+/// after it - each `<added>\t<removed>\t<path>`, with **no** [`FS`] byte in
+/// them, since a path cannot contain NUL either. That is what lets a reader
+/// tell a commit's own line from a trailing stat line unambiguously: a
+/// commit line has exactly two [`FS`] bytes, a stat line has none.
+///
+/// This used to lead with a reserved `%x1e` byte and frame records on that
+/// byte directly, which broke silently: an author name or email containing a
+/// literal `0x1e` - which git stores without complaint - split the record
+/// early and dropped the commit. Unlike a NUL, nothing stops git from storing
+/// that byte in an ident, so it was never a safe delimiter here.
+pub const WHO_FORMAT: &str = "--format=%an%x00%ae%x00%at";
 
 /// Number of fields in [`LOG_FORMAT`].
 const LOG_FIELDS: usize = 7;
@@ -74,6 +86,33 @@ pub fn git(args: &[&str]) -> Command {
     let mut c = Command::new("git");
     c.args(args).stdout(Stdio::piped()).stderr(Stdio::inherit());
     c
+}
+
+/// Base argv for a `git log` call using one of this crate's format strings.
+///
+/// Always requests `--encoding=UTF-8`. A commit's message and subject are
+/// stored in whatever charset `i18n.commitEncoding` names - git defaults to
+/// UTF-8, but a repository is free to set something else - and without this
+/// flag git emits the raw bytes verbatim. This project's whole pipeline is
+/// `&str`, so those bytes then go through a lossy UTF-8 conversion and any
+/// non-ASCII character is silently replaced with U+FFFD. `--encoding=UTF-8`
+/// makes git do the transcoding correctly instead, and is a verified no-op
+/// on an ordinary UTF-8 repository - passing it costs nothing there.
+///
+/// This does **not** cover the author or committer identity: verified against
+/// a raw, hand-built commit object, `--encoding` only ever transcodes the
+/// message body, never `%an`/`%ae`/`%cn`/`%ce`. A non-UTF-8 author name or
+/// email can still come through as whatever bytes it was written in; this
+/// is a documented limitation (see the README), not silently unhandled.
+///
+/// Centralised here, rather than repeated at each call site, so a future
+/// caller cannot forget it the way `WHO_FORMAT` once forgot NUL-safe framing.
+pub fn log_argv(format: &str) -> Vec<String> {
+    vec![
+        "log".to_string(),
+        format.to_string(),
+        "--encoding=UTF-8".to_string(),
+    ]
 }
 
 /// Raised when git itself ran and exited non-zero.
@@ -153,18 +192,12 @@ pub struct Records {
 }
 
 impl Records {
-    /// Reads records framed by [`RS`], for formats that carry extra lines.
-    pub fn spawn(cmd: Command) -> io::Result<Records> {
-        Records::spawn_framed(cmd, RS)
-    }
-
-    /// Reads [`LOG_FORMAT`] output: one commit per line, fields separated by
-    /// [`FS`].
-    ///
-    /// The pairing of format and framing has to match, and getting it wrong is
-    /// silent - `spawn` on this format would read the entire history as one
-    /// record - so it is a single call rather than two things to line up.
-    pub fn spawn_log(cmd: Command) -> io::Result<Records> {
+    /// Reads any of this crate's format strings: one line per record, fields
+    /// separated by [`FS`]. Every format string here - [`LOG_FORMAT`],
+    /// [`WHO_FORMAT`] - is built to that same convention, so one framing byte
+    /// serves all of them and a caller never has to line up a format with the
+    /// framing it needs.
+    pub fn spawn_lines(cmd: Command) -> io::Result<Records> {
         Records::spawn_framed(cmd, LINE)
     }
 
@@ -266,7 +299,7 @@ mod tests {
         // produce an error, not abort the caller's process.
         let mut cmd = Command::new("git");
         cmd.arg("--version");
-        let err = match Records::spawn(cmd) {
+        let err = match Records::spawn_lines(cmd) {
             Ok(_) => panic!("spawn should reject a command without piped stdout"),
             Err(e) => e,
         };
@@ -278,7 +311,7 @@ mod tests {
     fn a_missing_git_says_so_by_name() {
         let mut cmd = Command::new("definitely-not-a-real-program-xyz");
         cmd.stdout(Stdio::piped());
-        let err = match Records::spawn(cmd) {
+        let err = match Records::spawn_lines(cmd) {
             Ok(_) => panic!("that program should not exist"),
             Err(e) => e,
         };

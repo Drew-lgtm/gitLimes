@@ -1188,3 +1188,208 @@ fn a_branch_named_head_is_listed_and_the_symbolic_ref_is_not() {
     assert!(json.contains(r#""name":"topic/HEAD""#), "json: {}", json);
     assert!(!json.contains(r#""name":"origin""#), "json: {}", json);
 }
+
+// -------------------------------------------- who: control-byte survival
+
+#[test]
+fn who_does_not_drop_a_commit_whose_author_email_contains_0x1e() {
+    // `who` used to frame its records on a literal 0x1e byte - a byte git
+    // stores in an ident without complaint - so an author email containing
+    // one split the record early and the commit vanished, silently
+    // shrinking the total and skewing every other author's share.
+    //
+    // A private fixture, not the shared `repo()`: this commits directly onto
+    // it, and `repo()` is reused read-only by every other test in this file.
+    // It still starts from the same default history (its own Alice and Bob at
+    // different addresses), so this checks for the poisoned author
+    // specifically rather than assuming a total author count.
+    let f = Fixture::new("who-control-byte");
+    let poisoned_email = format!("carol{}x@e.com", '\u{1e}');
+    f.git_as(
+        99,
+        "Carol",
+        &poisoned_email,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "carol with a poisoned email",
+        ],
+    );
+
+    let out = strip_ansi(&f.ok(&["who", "--no-color"]));
+    let carol = out
+        .lines()
+        .find(|l| l.contains("Carol"))
+        .unwrap_or_else(|| panic!("Carol's commit vanished:\n{}", out));
+    assert!(
+        carol.trim_start().starts_with('1'),
+        "Carol should show exactly 1 commit: {}",
+        carol
+    );
+
+    let json = f.ok(&["who", "--json"]);
+    let carol_json = json
+        .lines()
+        .find(|l| l.contains(r#""name":"Carol""#))
+        .unwrap_or_else(|| panic!("Carol is missing from --json:\n{}", json));
+    assert!(carol_json.contains(r#""commits":1"#), "{}", carol_json);
+    // Per line, not the whole blob: NDJSON's own newlines between records are
+    // expected and are not the control byte under test.
+    assert!(
+        !carol_json.chars().any(|c| (c as u32) < 0x20),
+        "the poisoned byte must reach JSON as an escape, not a raw control byte: {}",
+        carol_json
+    );
+    assert!(
+        carol_json.contains("\\u001e"),
+        "expected the poisoned byte as a unicode escape: {}",
+        carol_json
+    );
+}
+
+#[test]
+fn who_lines_attributes_numstat_correctly_across_a_poisoned_commit() {
+    // The same poisoned byte must not misattribute --numstat's added/removed
+    // counts to the wrong author, or to no one. Uses names distinct from the
+    // shared fixture's own Alice/Bob to keep the JSON lookups unambiguous.
+    let f = Fixture::new("who-control-byte-lines");
+    let poisoned_email = format!("bo{}b@e.com", '\u{1e}');
+
+    std::fs::write(f.path().join("alicetwo.txt"), "one\ntwo\n").unwrap();
+    f.git(&["add", "-A"]);
+    f.git_as(
+        50,
+        "AliceTwo",
+        "alicetwo@e.com",
+        &["commit", "-q", "-m", "alice adds two lines"],
+    );
+
+    std::fs::write(f.path().join("bobtwo.txt"), "x\ny\nz\n").unwrap();
+    f.git(&["add", "-A"]);
+    f.git_as(
+        51,
+        "BobTwo",
+        &poisoned_email,
+        &["commit", "-q", "-m", "bob adds three lines"],
+    );
+
+    let json = f.ok(&["who", "--lines", "--json"]);
+    let bob = json
+        .lines()
+        .find(|l| l.contains(r#""name":"BobTwo""#))
+        .unwrap_or_else(|| panic!("BobTwo is missing from --json:\n{}", json));
+    let alice = json
+        .lines()
+        .find(|l| l.contains(r#""name":"AliceTwo""#))
+        .unwrap_or_else(|| panic!("AliceTwo is missing from --json:\n{}", json));
+    assert!(
+        bob.contains(r#""added":3"#),
+        "Bob's added-lines count is wrong or missing: {}",
+        bob
+    );
+    assert!(
+        alice.contains(r#""added":2"#),
+        "Alice's added-lines count is wrong, or Bob's stats leaked into hers: {}",
+        alice
+    );
+}
+
+// -------------------------------------------------- non-UTF-8 repositories
+
+/// "café" encoded as ISO-8859-1: `c`,`a`,`f`,0xE9. Not valid UTF-8 on its own
+/// (0xE9 is a continuation-less lead byte), so if this ever reaches a `&str`
+/// unconverted it becomes the JSON- and terminal-safe replacement character.
+const LATIN1_CAFE: [u8; 4] = [b'c', b'a', b'f', 0xE9];
+
+#[test]
+fn log_and_graph_recover_a_non_utf8_subject_via_git_encoding() {
+    // A repository may set i18n.commitEncoding to something other than UTF-8;
+    // git then emits %s in that encoding verbatim. Passing --encoding=UTF-8
+    // to git asks IT to transcode, which is what fixes this - without it,
+    // this project's whole &str pipeline would turn every non-ASCII
+    // character into U+FFFD, silently and unrecoverably.
+    let f = Fixture::new("non-utf8-subject");
+    f.git(&["config", "i18n.commitEncoding", "ISO-8859-1"]);
+
+    let mut subject = LATIN1_CAFE.to_vec();
+    subject.push(b'\n');
+    std::fs::write(f.path().join("msg.bin"), &subject).unwrap();
+    f.git_as(
+        90,
+        "Author",
+        "a@e.com",
+        &["commit", "-q", "--allow-empty", "-F", "msg.bin"],
+    );
+
+    let out = f.ok(&["log", "-n", "1", "--no-color"]);
+    assert!(
+        out.contains("café"),
+        "the Latin-1 subject was not recovered as UTF-8: {}",
+        out
+    );
+    assert!(
+        !out.contains('\u{fffd}'),
+        "a replacement character means the byte was lost, not transcoded: {}",
+        out
+    );
+
+    let graph = f.ok(&["graph", "-n", "1", "--no-color"]);
+    assert!(graph.contains("café"), "graph: {}", graph);
+
+    let json = f.ok(&["log", "-n", "1", "--json"]);
+    assert!(json.contains(r#""subject":"café"#), "json: {}", json);
+}
+
+#[test]
+fn who_and_branches_do_not_yet_transcode_a_non_utf8_author_identity() {
+    // Documents a known, deliberate boundary rather than leaving it silently
+    // unexamined: verified against a hand-built commit object that git's
+    // --encoding flag transcodes the message body only, never author or
+    // committer name/email, and `for-each-ref` (which `branches` uses) has
+    // no --encoding flag at all. So unlike the subject line, a non-UTF-8
+    // author identity still comes through lossy. If git ever starts
+    // transcoding idents too, this test will fail and need deliberate
+    // updating - which is the point, rather than this regressing silently.
+    let f = Fixture::new("non-utf8-author");
+    f.git(&["config", "i18n.commitEncoding", "ISO-8859-1"]);
+
+    // Author name via a raw, hand-built commit object: env vars and argv are
+    // themselves NUL/locale-constrained in ways that would confound a test
+    // that went through git_as instead.
+    let tree = f.git(&["hash-object", "-t", "tree", "--stdin"]);
+    let tree = tree.trim();
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("tree {}\n", tree).as_bytes());
+    body.extend_from_slice(b"author Andr");
+    body.push(0xE9); // the same Latin-1 'e-acute' as LATIN1_CAFE's last byte
+    body.extend_from_slice(b" <a@e.com> 1700000000 +0000\n");
+    body.extend_from_slice(b"committer Andr");
+    body.push(0xE9);
+    body.extend_from_slice(b" <a@e.com> 1700000000 +0000\n");
+    body.extend_from_slice(b"\ntest\n");
+
+    let commit_sha = f
+        .git_with_stdin(&["hash-object", "-w", "-t", "commit", "--stdin"], &body)
+        .trim()
+        .to_string();
+    f.git(&["update-ref", "refs/heads/main", &commit_sha]);
+
+    // update-ref pointed main at a single, parentless commit, so this is the
+    // only history `who` (HEAD-only, no --all) can see.
+    let who_json = f.ok(&["who", "--json"]);
+    let entry = who_json
+        .lines()
+        .next()
+        .unwrap_or_else(|| panic!("expected exactly one author: {}", who_json));
+    // The current, documented behaviour: the raw byte is not valid UTF-8, so
+    // it is replaced, not transcoded. This assertion is the pin - it should
+    // fail (and be updated deliberately) the day this gets a real fix.
+    assert!(
+        entry.contains('\u{fffd}'),
+        "author identity encoding either regressed further or was fixed \
+         without updating this pinned test: {}",
+        entry
+    );
+}
