@@ -120,7 +120,10 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         }
     };
 
-    let mut argv: Vec<String> = vec!["log".into(), WHO_FORMAT.into()];
+    // WHO_FORMAT has no message-body field today, so --encoding=UTF-8 has
+    // nothing to do yet; it costs nothing and protects a future field the
+    // same way log/graph are protected now.
+    let mut argv = repo::log_argv(WHO_FORMAT);
     if let Some(s) = &o.since {
         argv.push(format!("--since={}", s));
     }
@@ -134,7 +137,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     argv.extend(o.paths.iter().cloned());
 
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let mut rec = Records::spawn(repo::git(&refs))?;
+    let mut rec = Records::spawn_lines(repo::git(&refs))?;
 
     // Bounded by the number of distinct authors, not by history length.
     let mut authors: HashMap<String, Author> = HashMap::new();
@@ -142,16 +145,29 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     // The newest commit anchors the sparkline; buckets grow to reach the oldest.
     let mut anchor: Option<i64> = None;
     let mut width = START_WIDTH_SECS;
+    // With --numstat, a commit's changed-file lines follow its own line as
+    // separate records. This is the key of the author they belong to.
+    let mut current: Option<String> = None;
 
-    while let Some(record) = rec.next_record()? {
-        // With --numstat, git appends this commit's stat lines after the
-        // fields; the leading separator keeps them inside the same record.
-        let (head, stats) = match record.split_once('\n') {
-            Some((h, rest)) => (h, Some(rest)),
-            None => (record.as_ref(), None),
-        };
-        let mut f = head.split(repo::FS);
+    while let Some(line) = rec.next_record()? {
+        // A commit's own line has exactly two FS bytes (name, email,
+        // timestamp); a --numstat line has none, since a path can no more
+        // contain NUL than an ident can. That makes the two unambiguous to
+        // tell apart without a reserved delimiter of their own.
+        if line.matches(repo::FS).count() != 2 {
+            if let Some(key) = current.as_deref() {
+                if let Some(e) = authors.get_mut(key) {
+                    let (a, r) = sum_numstat(&line);
+                    e.added += a;
+                    e.removed += r;
+                }
+            }
+            continue;
+        }
+
+        let mut f = line.split(repo::FS);
         let (Some(name), Some(email), Some(ts)) = (f.next(), f.next(), f.next()) else {
+            current = None;
             continue;
         };
         let ts = parse_ts(ts);
@@ -173,7 +189,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         let bucket = (age / width) as usize;
 
         let key = email.to_ascii_lowercase();
-        let e = authors.entry(key).or_insert_with(|| Author {
+        let e = authors.entry(key.clone()).or_insert_with(|| Author {
             name: name.to_string(),
             email: email.to_string(),
             first: ts,
@@ -185,12 +201,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         e.first = e.first.min(ts);
         e.last = e.last.max(ts);
         e.activity[bucket.min(BUCKETS - 1)] += 1;
-
-        if let Some(stats) = stats {
-            let (a, r) = sum_numstat(stats);
-            e.added += a;
-            e.removed += r;
-        }
+        current = Some(key);
     }
     rec.finish()?;
 
@@ -324,24 +335,45 @@ fn widen(activity: &mut [u32; BUCKETS]) {
     *activity = merged;
 }
 
-/// numstat rows are `added<TAB>removed<TAB>path`, with `-` for binary files.
-fn sum_numstat(block: &str) -> (u64, u64) {
-    let mut added = 0;
-    let mut removed = 0;
-    for line in block.lines() {
-        let mut f = line.split('\t');
-        let (Some(a), Some(r)) = (f.next(), f.next()) else {
-            continue;
-        };
-        added += a.parse::<u64>().unwrap_or(0);
-        removed += r.parse::<u64>().unwrap_or(0);
-    }
-    (added, removed)
+/// Parses one `--numstat` row: `added<TAB>removed<TAB>path`, with `-` in
+/// place of a number for a binary file, which `parse` turns into a no-op 0
+/// rather than a hard error - a binary file's line count is meaningless, not
+/// a reason to lose the rest of the commit's stats.
+fn sum_numstat(line: &str) -> (u64, u64) {
+    let mut f = line.split('\t');
+    let (Some(a), Some(r)) = (f.next(), f.next()) else {
+        return (0, 0);
+    };
+    (a.parse().unwrap_or(0), r.parse().unwrap_or(0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_commit_line_and_a_numstat_line_are_told_apart_by_fs_count() {
+        // The whole scheme rests on this being unambiguous: a commit's own
+        // line always has exactly two FS bytes, a --numstat line - author-less,
+        // just added\tremoved\tpath - never has any.
+        let commit_line = format!("Alice{}a@e.com{}1700000000", repo::FS, repo::FS);
+        assert_eq!(commit_line.matches(repo::FS).count(), 2);
+
+        for numstat_line in ["3\t1\tsrc/main.rs", "0\t0\tREADME.md", "-\t-\tbinary.png"] {
+            assert_eq!(numstat_line.matches(repo::FS).count(), 0);
+        }
+    }
+
+    #[test]
+    fn sum_numstat_parses_one_row_and_treats_binary_as_zero() {
+        assert_eq!(sum_numstat("12\t7\tsrc/lib.rs"), (12, 7));
+        assert_eq!(
+            sum_numstat("-\t-\tbinary.png"),
+            (0, 0),
+            "a binary file's '-' must not abort the whole line"
+        );
+        assert_eq!(sum_numstat(""), (0, 0));
+    }
 
     #[test]
     fn widening_halves_resolution_without_losing_commits() {

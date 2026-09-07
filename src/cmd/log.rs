@@ -93,7 +93,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         }
     };
 
-    let mut argv: Vec<String> = vec!["log".into(), LOG_FORMAT.into()];
+    let mut argv = repo::log_argv(LOG_FORMAT);
     if let Some(n) = &o.max {
         argv.push("-n".into());
         argv.push(n.clone());
@@ -116,7 +116,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     argv.extend(o.paths.iter().cloned());
 
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let mut rec = Records::spawn_log(repo::git(&refs))?;
+    let mut rec = Records::spawn_lines(repo::git(&refs))?;
 
     let mut w = pager::out();
 

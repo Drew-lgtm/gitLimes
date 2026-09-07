@@ -75,6 +75,32 @@ Findings from an adversarial audit, each reproduced before fixing and pinned by 
   failing to drop the symbolic ref it was written for — `refs/remotes/origin/HEAD` shortens to
   `origin`, not `origin/HEAD`, so the name test never matched it and a phantom `origin` branch was
   listed instead. Symbolic refs are now identified by `%(symref)`.
+- `who` still framed its records on a literal `0x1e` byte, the exact hazard `LOG_FORMAT` was fixed
+  for — an author name or email containing that byte, which git stores without complaint, split
+  the record early and the commit silently vanished, skewing every other author's share. A
+  commit's own line is now told apart from a trailing `--numstat` line by counting field
+  separators (a header has exactly two, a stat line has none — a path can no more contain NUL than
+  an ident can), which needs no reserved delimiter of its own.
+- A repository with `i18n.commitEncoding` set to a non-UTF-8 charset had its commit subject and
+  message replaced character-by-character with `�`, irreversibly, in every command including
+  `--json`. `log`, `graph` and `who` now pass `--encoding=UTF-8` to git, which transcodes
+  correctly instead — verified a no-op on an ordinary UTF-8 repository. Author and committer
+  identity are **not** covered by this — verified directly, `--encoding` only ever transcodes the
+  message body — and `branches` (`for-each-ref`, which has no `--encoding` flag) is not covered at
+  all; see the README's Character encoding section for the precise, tested boundary.
+- The README and man page claimed an unfiltered graph's *column layout* matches `git log --graph`
+  exactly. Verified against two independently hand-built histories: gitlimes assigns a new lane
+  the leftmost free column and folds two lanes together only once their shared commit is reached,
+  while git's own renderer can fold earlier — so the two can lay out a multi-branch convergence
+  differently, occasionally needing an extra row. No edge is ever lost or fabricated either way;
+  only the wording was overclaiming column-for-column equivalence rather than edge correctness.
+
+### Changed
+
+- `Records::spawn` and the `RS` byte it defaulted to are removed: nothing in this crate still needs
+  `0x1e`-framing now that `who` no longer relies on it. `Records::spawn_log` is renamed to
+  `Records::spawn_lines`, since it is no longer specific to `LOG_FORMAT` — every format string
+  here shares the same newline-and-NUL framing, and the rename says so.
 
 ## [0.1.0]
 

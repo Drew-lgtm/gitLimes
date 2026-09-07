@@ -122,12 +122,19 @@ gitlimes graph [REV] [-n N] [-a] [--ascii]
 Filled dots are ordinary commits, hollow dots are merges. Each branch keeps one colour for its
 whole life, even as it changes column. `--ascii` for terminals without box-drawing characters.
 
-The topology matches `git log --graph` exactly, and is usually more compact — where git needs
-three rows to untangle a crossing merge, the box-drawing form needs one.
+Below the eviction limit described next, every parent-child edge git reports is drawn, correctly
+and unambiguously — no edge is ever lost or invented. What is **not** guaranteed is git's own
+exact column layout: gitlimes assigns each new lane the leftmost free column and only folds two
+lanes together once their literal shared commit is reached, so on some multi-branch histories it
+opens a lane, or takes an extra row to close one, in a different place than `git log --graph`
+would. The commit graph itself always ends up correct; the picture of it can differ, usually by
+being more compact — where git needs three rows to untangle a crossing merge, the box-drawing
+form often needs one — but occasionally the reverse.
 
 One honest limitation. A lane is retired when the commit it waits for arrives, and the table is
 capped at 64 lanes so it cannot grow without bound. Past that cap the stalest lane is dropped,
-and with it an edge — so the drawing stops being exact. Two things reach it:
+and with it an edge — so the drawing stops being exact in the stronger sense: an edge is actually
+missing, not just laid out differently. Two things reach it:
 
 - A **commit filter** (`--author`, `--since`, a path, or a shallow clone). git still reports each
   commit's real parents, but the filter hides some of them, so lanes are opened for commits that
@@ -136,9 +143,8 @@ and with it an edge — so the drawing stops being exact. Two things reach it:
   repository with many active branches.
 
 When it happens, gitlimes says so on stderr rather than passing a sketch off as the real thing.
-Below that, the topology matches `git log --graph` exactly. A merge with more parents than the
-cap is *not* affected: the table grows to fit one commit's parents, since that is bounded by the
-commit rather than by the length of the history.
+A merge with more parents than the cap is *not* affected: the table grows to fit one commit's
+parents, since that is bounded by the commit rather than by the length of the history.
 
 ## Machine-readable output
 
@@ -175,6 +181,25 @@ recognise; existing keys are not renamed, retyped or removed without a version b
 `track` on a branch, `added` and `removed` without `--lines`. The full key list per command is
 in the changelog.
 
+## Character encoding
+
+A repository may set `i18n.commitEncoding` to something other than UTF-8, in which case git
+writes the commit message and subject in that charset verbatim. `log`, `graph` and `who` pass
+`--encoding=UTF-8` to every `git log` call, so git does the transcoding — a subject in Latin-1
+or similar comes through correctly rather than being silently replaced. This costs nothing on an
+ordinary UTF-8 repository; it is a no-op there.
+
+**Author and committer identity is not covered.** Verified directly against a hand-built commit
+object: `--encoding` only ever transcodes the message body, never `%an`/`%ae`/`%cn`/`%ce`, and
+`branches` reads names via `git for-each-ref`, which has no `--encoding` flag at all. A non-ASCII
+author name or email written in a non-UTF-8 charset can still come through as the Unicode
+replacement character (`�`) in any command's output, including `--json`. This is a genuine,
+currently-unfixed limitation rather than an oversight left undocumented — a real fix would mean
+carrying raw bytes through a pipeline that is `&str`-typed end to end, which is disproportionate
+to how rarely this actually comes up. [`tests/cli.rs`](tests/cli.rs) pins both halves of this:
+that the subject is recovered, and that the identity fields are not, so a future fix is a
+deliberate, visible change rather than a silent one.
+
 ## Use it as a library
 
 The reusable engine is a library; the CLI is one consumer of it. A TUI, a graphical front end or a
@@ -183,7 +208,7 @@ script can link against it instead of shelling out and parsing text.
 ```rust
 use gitlimes::repo::{self, Commit, Records, LOG_FORMAT};
 
-let mut records = Records::spawn_log(repo::git(&["log", LOG_FORMAT, "--"]))?;
+let mut records = Records::spawn_lines(repo::git(&["log", LOG_FORMAT, "--"]))?;
 while let Some(record) = records.next_record()? {
     if let Some(commit) = Commit::parse(&record) {
         println!("{} {}", commit.short, commit.subject);
@@ -235,13 +260,13 @@ Windows `conhost`; Windows Terminal, macOS and Linux need nothing.
 cargo test
 ```
 
-121 tests in two layers.
+127 tests in two layers.
 
-**64 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
+**66 unit tests** cover the pure logic — lane assignment for linear history, merges, octopus
 merges, fork folding, lane reuse and compaction; rendering tests that pin the exact glyph output
 for each case; JSON escaping; pager resolution; and column fitting, relative dates and sparklines.
 
-**56 integration tests** run the real built binary against a real git repository. That is the only
+**60 integration tests** run the real built binary against a real git repository. That is the only
 way to cover the streaming record reader in `repo.rs` and the hand-rolled argument parsing, so
 they carry the claims that matter: that commit order matches git's, that a subject containing a
 pipe, quotes, a backslash and non-ASCII text survives the field-separated record format, that a

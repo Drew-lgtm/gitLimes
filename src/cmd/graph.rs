@@ -101,7 +101,8 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
 
     // topo-order keeps a branch's commits contiguous, which is what makes the
     // lanes read as continuous lines instead of interleaving by date.
-    let mut argv: Vec<String> = vec!["log".into(), LOG_FORMAT.into(), "--topo-order".into()];
+    let mut argv = repo::log_argv(LOG_FORMAT);
+    argv.push("--topo-order".into());
     argv.push("-n".into());
     argv.push(o.max.clone().unwrap_or_else(|| "40".into()));
     if o.all {
@@ -118,7 +119,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     argv.extend(o.paths.iter().cloned());
 
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let mut rec = Records::spawn_log(repo::git(&refs))?;
+    let mut rec = Records::spawn_lines(repo::git(&refs))?;
 
     let mut lanes = Lanes::new();
     let mut w = pager::out();

@@ -237,10 +237,16 @@ colour for its entire life, even as it changes column, and lane
 compaction keeps the drawing as narrow as the true concurrency allows.
 Below the eviction limit described under
 .BR "LIMITS" ,
-the topology matches
-.B git log \-\-graph
-exactly, and is usually more compact: a crossing merge that needs three
-rows in git's ASCII form needs one here.
+every parent\-child edge git reports is drawn, correctly and
+unambiguously \(em no edge is lost or invented. The exact column layout
+is not guaranteed to match
+.BR "git log \-\-graph" :
+a new lane always takes the leftmost free column and two lanes fold
+together only once their shared commit is reached, so some multi\-branch
+histories place a lane, or close one, on a different row than git would.
+The graph itself is always correct; the picture of it is usually more
+compact \(em a crossing merge that needs three rows in git's ASCII form
+often needs one here \(em but occasionally the reverse.
 .TP
 .BI "\-n, \-\-max\-count " N
 Show at most
