@@ -109,6 +109,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/gitlimes" "$STAGE/"
           fi
           cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
+          cp man/gitlimes.1 tldr/gitlimes.md "$STAGE/"
 
           if [ "$RUNNER_OS" = "Windows" ]; then
             7z a "$STAGE.zip" "$STAGE" >/dev/null

@@ -8,6 +8,12 @@ While the version is below 1.0, a minor bump may contain breaking changes — th
 
 ## [Unreleased]
 
+### Added
+
+- A man page ([`man/gitlimes.1`](man/gitlimes.1)), bundled in every release archive.
+- A [tldr-pages](https://github.com/tldr-pages/tldr)-format quick reference
+  ([`tldr/gitlimes.md`](tldr/gitlimes.md)), also bundled in every release archive.
+
 ### Fixed
 
 Findings from an adversarial audit, each reproduced before fixing and pinned by a regression test.
